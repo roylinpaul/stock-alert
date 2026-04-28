@@ -34,7 +34,7 @@ TICKERS = {
     "BTC": "BTC-USD",      # 比特幣兌美元
 }
 
-DAILY_DROP_THRESHOLD = -5.0       # 當日跌幅門檻 (%)
+DAILY_DROP_THRESHOLD = 5.0       # 當日跌幅門檻 (%)
 MULTI_DAY_WINDOW = 5              # 累積跌幅觀察天數
 MULTI_DAY_DROP_THRESHOLD = -10.0  # 累積跌幅門檻 (%)
 
