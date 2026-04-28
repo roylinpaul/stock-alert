@@ -33,7 +33,7 @@ HIGH_POINT_WINDOW = 30  # 近 N 日高點觀察區間
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_USER_IDS_RAW = os.environ.get("LINE_USER_IDS", "")
-LINE_USER_ID = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.strip()]
+LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.strip()]
 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
