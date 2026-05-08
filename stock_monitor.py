@@ -40,6 +40,11 @@ TICKERS = {
         "daily_threshold": -8.0,    # BTC 波動大,門檻寬一點
         "multi_day_threshold": -15.0,
     },
+    "NASDAQ": {
+        "symbol": "^IXIC",
+        "daily_threshold": -5.0,
+        "multi_day_threshold": -10.0,
+    },
 }
 
 MULTI_DAY_WINDOW = 5      # 累積跌幅觀察天數
