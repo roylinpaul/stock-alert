@@ -158,19 +158,18 @@ def analyze(name: str, config: dict):
 
 
 def format_normal(result: dict) -> str:
-    """一般狀況:簡潔顯示,包含季線/年線資訊。"""
+    """一般狀況:三行整齊顯示。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
 
-    line1 = (
-        f"{arrow} {name} 當日 {daily:+.2f}%\n"
-        f"   收盤 {result['latest_price']:.2f}|"
-        f"30日高 {result['high_30d']:.2f}({result['high_30d_date']})|"
-        f"距高 {result['drawdown_pct']:+.2f}%"
-    )
+    # 第一行:標的 + 當日漲跌 + 收盤價
+    line1 = f"{arrow} {name} 當日 {daily:+.2f}% 收盤 {result['latest_price']:.2f}"
 
-    # 加入季線/年線位置
+    # 第二行:30日高點 + 距高
+    line2 = f"   30日高 {result['high_30d']:.2f}({result['high_30d_date']})|距高 {result['drawdown_pct']:+.2f}%"
+
+    # 第三行:季線/年線位置
     ma_info = []
     if result["ma60"] is not None:
         pos = "上" if result["vs_ma60"] >= 0 else "下"
@@ -179,10 +178,12 @@ def format_normal(result: dict) -> str:
         pos = "上" if result["vs_ma240"] >= 0 else "下"
         ma_info.append(f"年線{pos}{abs(result['vs_ma240']):.1f}%")
 
-    if ma_info:
-        line1 += f"\n   {' | '.join(ma_info)}"
+    line3 = f"   {' | '.join(ma_info)}" if ma_info else ""
 
-    return line1
+    lines = [line1, line2]
+    if line3:
+        lines.append(line3)
+    return "\n".join(lines)
 
 
 def format_watch(result: dict) -> str:
