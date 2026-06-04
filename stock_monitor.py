@@ -217,7 +217,7 @@ def analyze(name: str, config: dict):
 
 
 def format_normal(result: dict) -> str:
-    """一般狀況:每行一個資訊,手機不會斷行。"""
+    """日報:價格/走勢 + 持股損益(若有)內嵌,一行一個資訊。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -229,12 +229,27 @@ def format_normal(result: dict) -> str:
         f"   距高 {result['drawdown_pct']:+.2f}%",
     ]
 
+    # === 季線/年線壓一行 ===
+    ma_line = ""
     if result["ma60"] is not None:
-        pos = "上" if result["vs_ma60"] >= 0 else "下"
-        lines.append(f"   季線{pos}{abs(result['vs_ma60']):.1f}%")
+        sign = "下" if result["vs_ma60"] < 0 else ""
+        ma_line += f"季線{sign}{abs(result['vs_ma60']):.1f}%"
     if result["ma240"] is not None:
-        pos = "上" if result["vs_ma240"] >= 0 else "下"
-        lines.append(f"   年線{pos}{abs(result['vs_ma240']):.1f}%")
+        if ma_line:
+            ma_line += "  "
+        sign = "下" if result["vs_ma240"] < 0 else ""
+        ma_line += f"年線{sign}{abs(result['vs_ma240']):.1f}%"
+    if ma_line:
+        lines.append(f"   {ma_line}")
+
+    # === 持股損益(若有) ===
+    if result.get("holding"):
+        h = result["holding"]
+        lines.append(f"   持股 {h['shares']:.5f} 股")
+        lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
+        lines.append(f"   現值 {h['market_value']:.2f}")
+        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
+        lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
 
     return "\n".join(lines)
 
@@ -346,7 +361,7 @@ def format_alert(result: dict) -> str:
 
 
 def format_portfolio(results: list) -> str:
-    """美股投資組合損益總覽(USD,每天附在最後)。每行一個資訊。"""
+    """美股投資組合總計(無標題,作為日報尾部)。"""
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
@@ -356,24 +371,12 @@ def format_portfolio(results: list) -> str:
     total_pnl = total_value - total_cost
     total_pct = (total_pnl / total_cost * 100) if total_cost else 0.0
 
-    lines = ["💼 美股投資組合損益(USD)"]
-    for r in held:
-        h = r["holding"]
-        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-        lines.append("─────────────")
-        lines.append(f"{sign} {r['name']}")
-        lines.append(f"   持股 {h['shares']:.5f} 股")
-        lines.append(f"   均價 {h['avg_cost']:.2f}")
-        lines.append(f"   現價 {r['latest_price']:.2f}")
-        lines.append(f"   成本 {h['cost_basis']:.2f}")
-        lines.append(f"   現值 {h['market_value']:.2f}")
-        lines.append(f"   損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
-
     big = "🟢" if total_pnl >= 0 else "🔴"
-    lines.append("═════════════")
-    lines.append(f"總成本 ${total_cost:.2f}")
-    lines.append(f"總現值 ${total_value:.2f}")
-    lines.append(f"{big} 總損益 ${total_pnl:+.2f}({total_pct:+.2f}%)")
+    lines = [
+        f"總成本 ${total_cost:.2f}",
+        f"總現值 ${total_value:.2f}",
+        f"{big} 總損益 ${total_pnl:+.2f}({total_pct:+.2f}%)",
+    ]
     return "\n".join(lines)
 
 
@@ -457,12 +460,13 @@ def build_message(results: list, usdtwd=None) -> str:
         for r in normal_results:
             sections.append(format_normal(r))
 
-    # === 美股投資組合損益(USD,每天都附) ===
+    # === 美股投資組合總計(無標題,分隔線) ===
     portfolio = format_portfolio(results)
     if portfolio:
+        sections.append("═════════════")
         sections.append(portfolio)
 
-    # === BTC 持倉損益(TWD,獨立,每天都附) ===
+    # === BTC 持倉損益(TWD,獨立,在最後) ===
     btc_result = next((r for r in results if r["name"] == "BTC"), None)
     btc_block = format_btc_holding(btc_result, usdtwd)
     if btc_block:
