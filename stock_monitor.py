@@ -1,6 +1,7 @@
 """
-美股 / 加密貨幣 每日市場日報 + 警示系統 (v7)
+美股 / 加密貨幣 每日市場日報 + 警示系統 (v8)
 監控標的:QQQ、TSLA、MRVL、BTC-USD
+持股損益:QQQ、TSLA、MRVL(每天自動以即時價計算損益金額與報酬率)
 通知時機:每天執行,無論是否觸發都會發送
 
 警示分級(由強到弱):
@@ -9,6 +10,7 @@
   📉 跌破季線警示:收盤價從季線(MA60)上方跌破到下方
   📌 觀察點提醒:從 30 日高點回落 >= 10%(BTC 15%)
   ✅ 一般日報:其餘標的的當日狀態
+  💼 投資組合損益:每天附在最後
 
 通知方式:LINE Messaging API
 """
@@ -46,6 +48,18 @@ TICKERS = {
         "multi_day_threshold": -15.0,
         "watch_threshold": -15.0,
     },
+}
+
+# ===== 持股設定(損益計算用) =====
+# 更新方式:對照券商「複委託庫存」CSV
+#   shares   -> 「可用庫存」欄
+#   avg_cost -> 「均價」欄(已含手續費,即真實成本均價)
+# 沒有持股的標的(如 BTC)不需列入,系統會自動跳過損益計算。
+# 來源:複委託庫存 20260604
+HOLDINGS = {
+    "QQQ":  {"shares": 0.92464, "avg_cost": 649.550},
+    "TSLA": {"shares": 1.77387, "avg_cost": 395.012},
+    "MRVL": {"shares": 2.00000, "avg_cost": 303.090},  # 昨日買 2 股,成交 302.8499 + 手續費 → 均價 303.09
 }
 
 MULTI_DAY_WINDOW = 5
@@ -132,6 +146,23 @@ def analyze(name: str, config: dict):
     if ma240_today is not None:
         vs_ma240 = (latest_price - ma240_today) / ma240_today * 100
 
+    # === 持股損益(若有部位) ===
+    h = HOLDINGS.get(name)
+    holding = None
+    if h and h["shares"] > 0:
+        cost_basis = h["shares"] * h["avg_cost"]
+        market_value = h["shares"] * latest_price
+        pnl_amount = market_value - cost_basis
+        pnl_pct = (pnl_amount / cost_basis * 100) if cost_basis else 0.0
+        holding = {
+            "shares": h["shares"],
+            "avg_cost": h["avg_cost"],
+            "cost_basis": cost_basis,
+            "market_value": market_value,
+            "pnl_amount": pnl_amount,
+            "pnl_pct": pnl_pct,
+        }
+
     return {
         "name": name,
         "latest_price": latest_price,
@@ -154,6 +185,7 @@ def analyze(name: str, config: dict):
         "daily_threshold": config["daily_threshold"],
         "multi_day_threshold": config["multi_day_threshold"],
         "watch_threshold": config["watch_threshold"],
+        "holding": holding,
     }
 
 
@@ -195,6 +227,11 @@ def format_watch(result: dict) -> str:
         lines.append(f"季線(MA60):{result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
     if result["ma240"] is not None:
         lines.append(f"年線(MA240):{result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
+
+    # 附帶持股損益
+    if result["holding"]:
+        h = result["holding"]
+        lines.append(f"持股損益:{h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
 
     lines.append("")
     lines.append("📍 已達到你設定的關注閾值,可評估市場狀況。")
@@ -266,6 +303,11 @@ def format_alert(result: dict) -> str:
     if result["ma240"] is not None:
         lines.append(f"📊 年線(MA240):{result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
 
+    # 附帶持股損益(若有部位)
+    if result["holding"]:
+        h = result["holding"]
+        lines.append(f"💼 持股損益:{h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+
     lines.append("")
     if result["is_daily_alert"]:
         lines.append(f"⚠️ 當日跌幅突破門檻 ({result['daily_threshold']}%)")
@@ -273,6 +315,38 @@ def format_alert(result: dict) -> str:
         lines.append(f"⚠️ 累積跌幅突破門檻 ({result['multi_day_threshold']}%)")
 
     lines.append("━━━━━━━━━━━━━━━")
+    return "\n".join(lines)
+
+
+def format_portfolio(results: list) -> str:
+    """投資組合損益總覽(每天附在最後)。每行一個資訊。"""
+    held = [r for r in results if r.get("holding")]
+    if not held:
+        return None
+
+    total_cost = sum(r["holding"]["cost_basis"] for r in held)
+    total_value = sum(r["holding"]["market_value"] for r in held)
+    total_pnl = total_value - total_cost
+    total_pct = (total_pnl / total_cost * 100) if total_cost else 0.0
+
+    lines = ["💼 投資組合損益總覽"]
+    for r in held:
+        h = r["holding"]
+        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
+        lines.append("─────────────")
+        lines.append(f"{sign} {r['name']}")
+        lines.append(f"   持股 {h['shares']:.5f} 股")
+        lines.append(f"   均價 {h['avg_cost']:.2f}")
+        lines.append(f"   現價 {r['latest_price']:.2f}")
+        lines.append(f"   成本 {h['cost_basis']:.2f}")
+        lines.append(f"   現值 {h['market_value']:.2f}")
+        lines.append(f"   損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+
+    big = "🟢" if total_pnl >= 0 else "🔴"
+    lines.append("═════════════")
+    lines.append(f"總成本 {total_cost:.2f}")
+    lines.append(f"總現值 {total_value:.2f}")
+    lines.append(f"{big} 總損益 {total_pnl:+.2f}({total_pct:+.2f}%)")
     return "\n".join(lines)
 
 
@@ -323,6 +397,11 @@ def build_message(results: list) -> str:
             sections.append(f"📊 市場日報 ({today})")
         for r in normal_results:
             sections.append(format_normal(r))
+
+    # === 投資組合損益(每天都附) ===
+    portfolio = format_portfolio(results)
+    if portfolio:
+        sections.append(portfolio)
 
     return "\n\n".join(sections)
 
@@ -384,9 +463,12 @@ def main():
                     ma_info += f" MA60:{r['ma60']:.1f}({r['vs_ma60']:+.1f}%)"
                 if r["vs_ma240"] is not None:
                     ma_info += f" MA240:{r['ma240']:.1f}({r['vs_ma240']:+.1f}%)"
+                pnl_info = ""
+                if r["holding"]:
+                    pnl_info = f" 損益:{r['holding']['pnl_amount']:+.2f}({r['holding']['pnl_pct']:+.2f}%)"
                 print(
                     f"[{status}] {name} 當日 {r['daily_change_pct']:+.2f}%, "
-                    f"距高 {r['drawdown_pct']:+.2f}%{ma_info}"
+                    f"距高 {r['drawdown_pct']:+.2f}%{ma_info}{pnl_info}"
                 )
         except Exception as e:
             print(f"[錯誤] 處理 {name} 時發生例外:{e}")
