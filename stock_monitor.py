@@ -1,6 +1,6 @@
 """
-美股 / 加密貨幣 每日市場日報 + 警示系統 (v6)
-監控標的:QQQ、TSLA、BTC-USD、NASDAQ Composite
+美股 / 加密貨幣 每日市場日報 + 警示系統 (v7)
+監控標的:QQQ、TSLA、MRVL、BTC-USD
 通知時機:每天執行,無論是否觸發都會發送
 
 警示分級(由強到弱):
@@ -34,17 +34,17 @@ TICKERS = {
         "multi_day_threshold": -10.0,
         "watch_threshold": -10.0,
     },
+    "MRVL": {
+        "symbol": "MRVL",
+        "daily_threshold": -5.0,
+        "multi_day_threshold": -10.0,
+        "watch_threshold": -10.0,
+    },
     "BTC": {
         "symbol": "BTC-USD",
         "daily_threshold": -8.0,
         "multi_day_threshold": -15.0,
         "watch_threshold": -15.0,
-    },
-    "NASDAQ": {
-        "symbol": "^IXIC",
-        "daily_threshold": -5.0,
-        "multi_day_threshold": -10.0,
-        "watch_threshold": -10.0,
     },
 }
 
