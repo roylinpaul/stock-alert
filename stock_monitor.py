@@ -1,7 +1,9 @@
 """
-美股 / 加密貨幣 每日市場日報 + 警示系統 (v8)
+美股 / 加密貨幣 每日市場日報 + 警示系統 (v9)
 監控標的:QQQ、TSLA、MRVL、BTC-USD
-持股損益:QQQ、TSLA、MRVL(每天自動以即時價計算損益金額與報酬率)
+持股損益:
+  - 美股(USD):QQQ、TSLA、MRVL —— 用券商成本均價 × 持股
+  - BTC(TWD):獨立計算 —— 用即時幣價 × 匯率換算台幣,對比台幣成本
 通知時機:每天執行,無論是否觸發都會發送
 
 警示分級(由強到弱):
@@ -10,7 +12,8 @@
   📉 跌破季線警示:收盤價從季線(MA60)上方跌破到下方
   📌 觀察點提醒:從 30 日高點回落 >= 10%(BTC 15%)
   ✅ 一般日報:其餘標的的當日狀態
-  💼 投資組合損益:每天附在最後
+  💼 投資組合損益(美股,USD):每天附在最後
+  ₿ BTC 持倉損益(TWD):每天附在最後
 
 通知方式:LINE Messaging API
 """
@@ -50,16 +53,29 @@ TICKERS = {
     },
 }
 
-# ===== 持股設定(損益計算用) =====
+# ===== 美股持股設定(USD 損益計算用) =====
 # 更新方式:對照券商「複委託庫存」CSV
 #   shares   -> 「可用庫存」欄
 #   avg_cost -> 「均價」欄(已含手續費,即真實成本均價)
-# 沒有持股的標的(如 BTC)不需列入,系統會自動跳過損益計算。
+# 或直接用 gen_holdings.py 由 CSV 自動產生後貼回此區塊。
+# 沒有持股的標的(如 BTC)不列入此處,BTC 由下方 BTC_HOLDING 獨立計算。
 # 來源:複委託庫存 20260604
 HOLDINGS = {
     "QQQ":  {"shares": 0.92464, "avg_cost": 649.550},
     "TSLA": {"shares": 1.77387, "avg_cost": 395.012},
-    "MRVL": {"shares": 2.00000, "avg_cost": 303.090},  # 昨日買 2 股,成交 302.8499 + 手續費 → 均價 303.09
+    "MRVL": {"shares": 2.00000, "avg_cost": 303.090},
+}
+
+# ===== BTC 持倉設定(TWD 損益計算用,與美股分開) =====
+# BTC 以台幣在交易所買進,與複委託美股不同貨幣/平台,故獨立計算。
+# 系統每天:現值(TWD) = amount × BTC-USD即時價 × USD/TWD即時匯率
+#           損益(TWD) = 現值 - cost_twd
+#   amount   -> 你錢包顯示的 BTC 數量
+#   cost_twd -> 投入成本(台幣)
+# amount 設為 0 則不顯示 BTC 損益(但 BTC 仍會照常做大跌/均線監控)。
+BTC_HOLDING = {
+    "amount": 0.00433356,   # ⚠️ 估算值(由錢包現值反推),請換成錢包實際 BTC 數量
+    "cost_twd": 10000.0,    # 投入成本(台幣),由錢包 ROI -11.56% 反推 ≈ 10000
 }
 
 MULTI_DAY_WINDOW = 5
@@ -81,6 +97,17 @@ def fetch_price_data(symbol: str, days: int = 260):
     if hist.empty:
         return None
     return hist["Close"].dropna()
+
+
+def fetch_usdtwd():
+    """抓 USD/TWD 即時匯率(1 美元 = ? 台幣)。失敗回傳 None。"""
+    try:
+        fx = yf.Ticker("TWD=X").history(period="5d")["Close"].dropna()
+        if not fx.empty:
+            return float(fx.iloc[-1])
+    except Exception as e:
+        print(f"[警告] 匯率(USD/TWD)抓取失敗:{e}")
+    return None
 
 
 def calc_ma(closes, window: int):
@@ -146,7 +173,7 @@ def analyze(name: str, config: dict):
     if ma240_today is not None:
         vs_ma240 = (latest_price - ma240_today) / ma240_today * 100
 
-    # === 持股損益(若有部位) ===
+    # === 美股持股損益(USD,若有部位) ===
     h = HOLDINGS.get(name)
     holding = None
     if h and h["shares"] > 0:
@@ -303,7 +330,7 @@ def format_alert(result: dict) -> str:
     if result["ma240"] is not None:
         lines.append(f"📊 年線(MA240):{result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
 
-    # 附帶持股損益(若有部位)
+    # 附帶持股損益(美股,若有部位)
     if result["holding"]:
         h = result["holding"]
         lines.append(f"💼 持股損益:{h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
@@ -319,7 +346,7 @@ def format_alert(result: dict) -> str:
 
 
 def format_portfolio(results: list) -> str:
-    """投資組合損益總覽(每天附在最後)。每行一個資訊。"""
+    """美股投資組合損益總覽(USD,每天附在最後)。每行一個資訊。"""
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
@@ -329,7 +356,7 @@ def format_portfolio(results: list) -> str:
     total_pnl = total_value - total_cost
     total_pct = (total_pnl / total_cost * 100) if total_cost else 0.0
 
-    lines = ["💼 投資組合損益總覽"]
+    lines = ["💼 美股投資組合損益(USD)"]
     for r in held:
         h = r["holding"]
         sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
@@ -344,13 +371,45 @@ def format_portfolio(results: list) -> str:
 
     big = "🟢" if total_pnl >= 0 else "🔴"
     lines.append("═════════════")
-    lines.append(f"總成本 {total_cost:.2f}")
-    lines.append(f"總現值 {total_value:.2f}")
-    lines.append(f"{big} 總損益 {total_pnl:+.2f}({total_pct:+.2f}%)")
+    lines.append(f"總成本 ${total_cost:.2f}")
+    lines.append(f"總現值 ${total_value:.2f}")
+    lines.append(f"{big} 總損益 ${total_pnl:+.2f}({total_pct:+.2f}%)")
     return "\n".join(lines)
 
 
-def build_message(results: list) -> str:
+def format_btc_holding(btc_result: dict, usdtwd) -> str:
+    """BTC 持倉損益(TWD,獨立計算)。每行一個資訊。"""
+    if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
+        return None
+    if btc_result is None:
+        return None
+    if usdtwd is None:
+        return ("₿ BTC 持倉損益(台幣)\n"
+                "─────────────\n"
+                "   ⚠️ 匯率抓取失敗,本次無法換算台幣損益")
+
+    amount = BTC_HOLDING["amount"]
+    cost_twd = BTC_HOLDING["cost_twd"]
+    btc_usd = btc_result["latest_price"]
+    value_twd = amount * btc_usd * usdtwd
+    pnl_twd = value_twd - cost_twd
+    pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
+    sign = "🟢" if pnl_twd >= 0 else "🔴"
+
+    lines = [
+        "₿ BTC 持倉損益(台幣)",
+        "─────────────",
+        f"   持有 {amount:.8f} BTC",
+        f"   幣價 US${btc_usd:,.0f}",
+        f"   匯率 {usdtwd:.2f}(USD/TWD)",
+        f"   成本 NT${cost_twd:,.0f}",
+        f"   現值 NT${value_twd:,.0f}",
+        f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)",
+    ]
+    return "\n".join(lines)
+
+
+def build_message(results: list, usdtwd=None) -> str:
     """組裝完整訊息。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
@@ -398,10 +457,16 @@ def build_message(results: list) -> str:
         for r in normal_results:
             sections.append(format_normal(r))
 
-    # === 投資組合損益(每天都附) ===
+    # === 美股投資組合損益(USD,每天都附) ===
     portfolio = format_portfolio(results)
     if portfolio:
         sections.append(portfolio)
+
+    # === BTC 持倉損益(TWD,獨立,每天都附) ===
+    btc_result = next((r for r in results if r["name"] == "BTC"), None)
+    btc_block = format_btc_holding(btc_result, usdtwd)
+    if btc_block:
+        sections.append(btc_block)
 
     return "\n\n".join(sections)
 
@@ -442,6 +507,10 @@ def main():
     print(f"=== 監控執行於 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     print(f"通知對象數:{len(LINE_USER_IDS)} 人")
 
+    usdtwd = fetch_usdtwd()
+    if usdtwd is not None:
+        print(f"USD/TWD 匯率:{usdtwd:.4f}")
+
     results = []
     for name, config in TICKERS.items():
         try:
@@ -477,7 +546,7 @@ def main():
         print("無任何資料,結束。")
         return
 
-    message = build_message(results)
+    message = build_message(results, usdtwd)
     print("\n=== 即將發送訊息 ===")
     print(message)
     print("===================\n")
