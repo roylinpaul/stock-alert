@@ -59,11 +59,11 @@ TICKERS = {
 #   avg_cost -> 「均價」欄(已含手續費,即真實成本均價)
 # 或直接用 gen_holdings.py 由 CSV 自動產生後貼回此區塊。
 # 沒有持股的標的(如 BTC)不列入此處,BTC 由下方 BTC_HOLDING 獨立計算。
-# 來源:複委託庫存 20260604
+# 來源:複委託庫存 20260609
 HOLDINGS = {
-    "QQQ":  {"shares": 0.92464, "avg_cost": 649.550},
-    "TSLA": {"shares": 1.77387, "avg_cost": 395.012},
-    "MRVL": {"shares": 2.00000, "avg_cost": 303.090},
+    "QQQ":  {"shares": 1.06163, "avg_cost": 660.023},
+    "TSLA": {"shares": 3.01145, "avg_cost": 400.013},
+    "MRVL": {"shares": 3.00000, "avg_cost": 296.460},
 }
 
 # ===== BTC 持倉設定(TWD 損益計算用,與美股分開) =====
