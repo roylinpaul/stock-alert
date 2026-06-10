@@ -317,14 +317,13 @@ def format_ma_break(result: dict) -> str:
 
     # 附帶持股損益(若有部位)
     if result["holding"]:
-              h = result["holding"]
-              lines.append(f"💼 持股 {h['shares']:.5f} 股")
-              lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
-              lines.append(f"   現值 {h['market_value']:.2f}")
-              sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-          lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
-return "\n".join(lines)
-
+        h = result["holding"]
+        lines.append(f"💼 持股 {h['shares']:.5f} 股")
+        lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
+        lines.append(f"   現值 {h['market_value']:.2f}")
+        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
+        lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+    return "\n".join(lines)
 
 def format_alert(result: dict) -> str:
     """觸發大跌:強化版顯示。"""
@@ -357,10 +356,10 @@ def format_alert(result: dict) -> str:
     if result["holding"]:
         h = result["holding"]
         lines.append(f"💼 持股 {h['shares']:.5f} 股")
-              lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
-              lines.append(f"   現值 {h['market_value']:.2f}")
-              sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-              lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+        lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
+        lines.append(f"   現值 {h['market_value']:.2f}")
+        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
+        lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
 
     lines.append("")
     if result["is_daily_alert"]:
