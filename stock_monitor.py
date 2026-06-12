@@ -10,7 +10,6 @@
   🚨 大跌警示:當日跌幅 >= 5%(BTC 8%)或 5 日累積 >= 10%(BTC 15%)h
   📉 跌破年線警示:收盤價從年線(MA240)上方跌破到下方
   📉 跌破季線警示:收盤價從季線(MA60)上方跌破到下方
-  📌 觀察點提醒:從 30 日高點回落 >= 10%(BTC 15%)
   ✅ 一般日報:其餘標的的當日狀態
   💼 投資組合損益(美股,USD):每天附在最後
   ₿ BTC 持倉損益(TWD):每天附在最後
@@ -424,52 +423,13 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
 
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息。"""
+    """組裝完整訊息。每個標的統一用 format_normal 顯示。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # 五類分組:大跌 → 跌破均線 → 觀察點 → 一般日報
-    alert_results = [r for r in results if r["is_alert"]]
-    ma_break_results = [r for r in results if (r["broke_ma60"] or r["broke_ma240"]) and not r["is_alert"]]
-    watch_results = [r for r in results if r["is_watch"] and not r["is_alert"] and not r["broke_ma60"] and not r["broke_ma240"]]
-    normal_results = [r for r in results if not r["is_alert"] and not r["is_watch"] and not r["broke_ma60"] and not r["broke_ma240"]]
+    sections = [f"📊 市場日報 ({today})"]
 
-    sections = []
-
-    # === 大跌警示 ===
-    if alert_results:
-        sections.append(f"🚨🚨🚨 緊急警示 🚨🚨🚨\n({today})")
-        for r in alert_results:
-            sections.append(format_alert(r))
-            # 如果同時跌破均線,附帶提示
-            if r["broke_ma60"] or r["broke_ma240"]:
-                sections.append(format_ma_break(r))
-
-    # === 跌破均線警示 ===
-    if ma_break_results:
-        if not alert_results:
-            sections.append(f"📉 均線跌破警示 ({today})")
-        else:
-            sections.append("📉 均線跌破警示")
-        for r in ma_break_results:
-            sections.append(format_ma_break(r))
-
-    # === 觀察點 ===
-    if watch_results:
-        if alert_results or ma_break_results:
-            sections.append("📌 觀察點提醒")
-        else:
-            sections.append(f"📌 觀察點提醒 ({today})")
-        for r in watch_results:
-            sections.append(format_watch(r))
-
-    # === 一般日報 ===
-    if normal_results:
-        if alert_results or ma_break_results or watch_results:
-            sections.append("📊 其餘標的日報")
-        else:
-            sections.append(f"📊 市場日報 ({today})")
-        for r in normal_results:
-            sections.append(format_normal(r))
+    for r in results:
+        sections.append(format_normal(r))
 
     # === 美股投資組合總計(無標題,分隔線) ===
     portfolio = format_portfolio(results)
@@ -484,7 +444,6 @@ def build_message(results: list, usdtwd=None) -> str:
         sections.append(btc_block)
 
     return "\n\n".join(sections)
-
 
 def send_line_message(text: str) -> bool:
     """透過 LINE Messaging API push 訊息。"""
