@@ -423,25 +423,31 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
 
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息。每個標的統一用 format_normal 顯示。"""
+    """組裝完整訊息。美股標的在前,BTC 日報+持倉損益合併在最後。"""
     today = datetime.now().strftime("%Y-%m-%d")
+
+    stock_results = [r for r in results if r["name"] != "BTC"]
+    btc_result = next((r for r in results if r["name"] == "BTC"), None)
 
     sections = [f"📊 市場日報 ({today})"]
 
-    for r in results:
+    # === 美股標的日報 ===
+    for r in stock_results:
         sections.append(format_normal(r))
 
-    # === 美股投資組合總計(無標題,分隔線) ===
-    portfolio = format_portfolio(results)
+    # === 美股投資組合總計 ===
+    portfolio = format_portfolio(stock_results)
     if portfolio:
         sections.append("═════════════")
         sections.append(portfolio)
 
-    # === BTC 持倉損益(TWD,獨立,在最後) ===
-    btc_result = next((r for r in results if r["name"] == "BTC"), None)
-    btc_block = format_btc_holding(btc_result, usdtwd)
-    if btc_block:
-        sections.append(btc_block)
+    # === BTC 日報 + 持倉損益合併 ===
+    if btc_result is not None:
+        btc_lines = [format_normal(btc_result)]
+        btc_holding_block = format_btc_holding(btc_result, usdtwd)
+        if btc_holding_block:
+            btc_lines.append(btc_holding_block)
+        sections.append("\n".join(btc_lines))
 
     return "\n\n".join(sections)
 
