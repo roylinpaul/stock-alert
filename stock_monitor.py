@@ -57,24 +57,19 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 
 def fetch_price_data(symbol: str, days: int = 260):
-    """抓取最近 N 個交易日的收盤價，增強對剛收盤時 NaN 值的防禦。"""
+    """抓取最近交易日的收盤價，修正時區比對導致重複插入價格的 bug。"""
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="2y") # 改用穩定的固定 period 降低 API 報錯率
+        # 美股與加密貨幣一律抓 2 年歷史 K 線，確保週期的均線計算安全
+        hist = ticker.history(period="2y") 
         if hist.empty:
             return None
         
         closes = hist["Close"].dropna()
         
-        # 額外防禦：若剛好遇到收盤結算導致最新一筆遺失，嘗試抓取最新價格補回
-        try:
-            latest_live = ticker.fast_info['lastPrice']
-            today_str = datetime.now().strftime('%Y-%m-%d')
-            if today_str not in closes.index.strftime('%Y-%m-%d') and latest_live:
-                from pandas import Series, Timestamp
-                closes[Timestamp(today_str)] = latest_live
-        except Exception:
-            pass
+        # 只要 K 線長度大於 2，最後一筆就是最新收盤價，無須手動 append 避免重複計算
+        if len(closes) < 2:
+            return None
             
         return closes
     except Exception as e:
@@ -283,7 +278,7 @@ def format_ma_break(result: dict) -> str:
     if result["broke_ma60"]:
         lines.extend([
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
-            f"📉📉  {name} 跌破季線  📉痕",
+            f"📉📉  {name} 跌破季線  📉📉",
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
             "",
             f"💰 收盤: {result['latest_price']:.2f}",
@@ -402,7 +397,7 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
 
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息 (修正核心：依照標的狀態動態切換排版格式)。"""
+    """組裝完整訊息 (動態格式分配)。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
@@ -410,7 +405,7 @@ def build_message(results: list, usdtwd=None) -> str:
 
     sections = [f"📊 市場日報 ({today})", "━━━━━━━━━━━━━━━"]
 
-    # === 1. 美股標的日報 (動態格式) ===
+    # === 1. 美股個股動態格式 ===
     for r in stock_results:
         if r["is_alert"]:
             sections.append(format_alert(r))
@@ -421,7 +416,7 @@ def build_message(results: list, usdtwd=None) -> str:
         else:
             sections.append(format_normal(r))
 
-    # === 2. BTC 日報 (動態格式) ===
+    # === 2. BTC 動態格式 ===
     if btc_result is not None:
         if btc_result["is_alert"]:
             sections.append(format_alert(btc_result))
