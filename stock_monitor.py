@@ -58,12 +58,12 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 def fetch_price_data(symbol: str):
     """
-    抓取歷史收盤價，並透過交叉驗證機制解決時區重複、盤後髒資料與休市問題。
+    僅抓取純常規交易時間(Regular Market Hours)的收盤價歷史，
+    不引入任何盤前/盤後即時變動價，確保任何時間執行數據都一致。
     """
     try:
         ticker = yf.Ticker(symbol)
-        
-        # 1. 抓取 2 年常規歷史 K 線（排除盤前盤後預設噪音）
+        # 嚴格禁用 prepost (不導入盤前盤後)，直接抓官方結算的日 K 線歷史
         hist = ticker.history(period="2y", prepost=False)
         if hist.empty:
             return None
@@ -71,21 +71,7 @@ def fetch_price_data(symbol: str):
         closes = hist["Close"].dropna()
         if len(closes) < 2:
             return None
-
-        # 2. 針對美股個股（排除 BTC）進行高精度定盤價校正
-        if not symbol.endswith("BTC-USD"):
-            try:
-                # fast_info['lastPrice'] 經常代表交易所定盤後的真實最後收盤價
-                live_price = ticker.fast_info['lastPrice']
-                
-                if live_price:
-                    # 檢查歷史 K 線最後一筆是否與定盤價嚴重脫鉤（防止 history 出現盤後異常低價）
-                    if abs(closes.iloc[-1] - live_price) / closes.iloc[-1] > 0.005:
-                        print(f"[{symbol}] 歷史收盤價 ({closes.iloc[-1]}) 與實時定盤價 ({live_price}) 存在落差，自動對齊即時價。")
-                        closes.iloc[-1] = live_price
-            except Exception as e:
-                print(f"[提示] {symbol} 實時校正跳過: {e}")
-                
+            
         return closes
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
@@ -125,7 +111,7 @@ def analyze(name: str, config: dict):
     latest_price = closes.iloc[-1]
     prev_price = closes.iloc[-2]
     
-    # 計算當日變動百分比
+    # 完全由常規收盤 K 線計算當日變動，不受盤前交易影響
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
 
     # === 30 日高點 ===
