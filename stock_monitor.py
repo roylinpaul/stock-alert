@@ -133,6 +133,8 @@ def analyze(name: str, config: dict):
     # === 30 日高點 ===
     hp_window = closes.iloc[-HIGH_POINT_WINDOW:] if len(closes) >= HIGH_POINT_WINDOW else closes
     high_30d = hp_window.max()
+
+  print(f"[DEBUG] {name}: closes dates = {closes.index[-2:].tolist()}, prices = {[latest_price, prev_price]}")
     high_30d_date = hp_window.idxmax().strftime("%m/%d")
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
 
