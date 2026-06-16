@@ -56,21 +56,36 @@ LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.stri
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 
-def fetch_price_data(symbol: str, days: int = 260):
-    """抓取最近交易日的收盤價，修正時區比對導致重複插入價格的 bug。"""
+def fetch_price_data(symbol: str):
+    """
+    抓取歷史收盤價，並透過交叉驗證機制解決時區重複、盤後髒資料與休市問題。
+    """
     try:
         ticker = yf.Ticker(symbol)
-        # 美股與加密貨幣一律抓 2 年歷史 K 線，確保週期的均線計算安全
-        hist = ticker.history(period="2y") 
+        
+        # 1. 抓取 2 年常規歷史 K 線（排除盤前盤後預設噪音）
+        hist = ticker.history(period="2y", prepost=False)
         if hist.empty:
             return None
         
         closes = hist["Close"].dropna()
-        
-        # 只要 K 線長度大於 2，最後一筆就是最新收盤價，無須手動 append 避免重複計算
         if len(closes) < 2:
             return None
-            
+
+        # 2. 針對美股個股（排除 BTC）進行高精度定盤價校正
+        if not symbol.endswith("BTC-USD"):
+            try:
+                # fast_info['lastPrice'] 經常代表交易所定盤後的真實最後收盤價
+                live_price = ticker.fast_info['lastPrice']
+                
+                if live_price:
+                    # 檢查歷史 K 線最後一筆是否與定盤價嚴重脫鉤（防止 history 出現盤後異常低價）
+                    if abs(closes.iloc[-1] - live_price) / closes.iloc[-1] > 0.005:
+                        print(f"[{symbol}] 歷史收盤價 ({closes.iloc[-1]}) 與實時定盤價 ({live_price}) 存在落差，自動對齊即時價。")
+                        closes.iloc[-1] = live_price
+            except Exception as e:
+                print(f"[提示] {symbol} 實時校正跳過: {e}")
+                
         return closes
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
@@ -102,13 +117,15 @@ def calc_ma(closes, window: int):
 
 def analyze(name: str, config: dict):
     """分析單一標的。"""
-    closes = fetch_price_data(config["symbol"], days=MA_YEAR + 10)
+    closes = fetch_price_data(config["symbol"])
     if closes is None or len(closes) < 2:
         print(f"[警告] {name} 資料不足,略過")
         return None
 
     latest_price = closes.iloc[-1]
     prev_price = closes.iloc[-2]
+    
+    # 計算當日變動百分比
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
 
     # === 30 日高點 ===
@@ -196,7 +213,7 @@ def analyze(name: str, config: dict):
 
 
 def format_normal(result: dict) -> str:
-    """日報格式。"""
+    """一般日報格式。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -232,7 +249,7 @@ def format_normal(result: dict) -> str:
 
 
 def format_watch(result: dict) -> str:
-    """觀察點提醒。"""
+    """觀察點提醒格式。"""
     lines = [
         f"📌 {result['name']} 觸發觀察點",
         f"當前: {result['latest_price']:.2f}",
@@ -251,12 +268,12 @@ def format_watch(result: dict) -> str:
         lines.append(f"持股損益: {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
 
     lines.append("")
-    lines.append("📍 已達到你設定的關注閾值,可評估市場狀況。")
+    lines.append("📍 已達到你設定的關注閾值，可評估市場狀況。")
     return "\n".join(lines)
 
 
 def format_ma_break(result: dict) -> str:
-    """跌破季線或年線的警示。"""
+    """跌破季線或年線的警示格式。"""
     name = result["name"]
     lines = []
 
@@ -271,7 +288,7 @@ def format_ma_break(result: dict) -> str:
             f"📊 距年線: {result['vs_ma240']:+.2f}%",
             "",
             "⚠️ 股價從年線上方跌破到下方",
-            "⚠️ 年線是長期多空分界,跌破代表中長期趨勢轉弱",
+            "⚠️ 年線是長期多空分界，跌破代表中長期趨勢轉弱",
             "━━━━━━━━━━━━━━━",
         ])
 
@@ -286,7 +303,7 @@ def format_ma_break(result: dict) -> str:
             f"📊 距季線: {result['vs_ma60']:+.2f}%",
             "",
             "⚠️ 股價從季線上方跌破到下方",
-            "⚠️ 季線是中期趨勢支撐,跌破需留意後續走勢",
+            "⚠️ 季線是中期趨勢支撐，跌破需留意後續走勢",
             "━━━━━━━━━━━━━━━",
         ])
 
@@ -301,7 +318,7 @@ def format_ma_break(result: dict) -> str:
 
 
 def format_alert(result: dict) -> str:
-    """觸發大跌:強化版顯示。"""
+    """觸發大跌的強化版警示格式。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     lines = [
@@ -365,7 +382,7 @@ def format_portfolio(results: list) -> str:
 
 
 def format_btc_holding(btc_result: dict, usdtwd) -> str:
-    """BTC 持倉損益。"""
+    """BTC 持倉損益（TWD）。"""
     if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
         return None
     if btc_result is None:
@@ -373,7 +390,7 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
     if usdtwd is None:
         return ("₿ BTC 持倉損益(台幣)\n"
                 "─────────────\n"
-                "   ⚠️ 匯率抓取失敗,本次無法換算台幣損益")
+                "   ⚠️ 匯率抓取失敗，本次無法換算台幣損益")
 
     amount = BTC_HOLDING["amount"]
     cost_twd = BTC_HOLDING["cost_twd"]
@@ -397,7 +414,7 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
 
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息 (動態格式分配)。"""
+    """組裝完整訊息。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
