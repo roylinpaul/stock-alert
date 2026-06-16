@@ -1,28 +1,7 @@
-"""
-美股 / 加密貨幣 每日市場日報 + 警示系統 (v9)
-監控標的:QQQ、TSLA、MRVL、BTC-USD
-持股損益:
-  - 美股(USD):QQQ、TSLA、MRVL —— 用券商成本均價 × 持股
-  - BTC(TWD):獨立計算 —— 用即時幣價 × 匯率換算台幣,對比台幣成本
-通知時機:每天執行,無論是否觸發都會發送
-
-警示分級(由強到弱):
-  🚨 大跌警示:當日跌幅 >= 5%(BTC 8%)或 5 日累積 >= 10%(BTC 15%)h
-  📉 跌破年線警示:收盤價從年線(MA240)上方跌破到下方
-  📉 跌破季線警示:收盤價從季線(MA60)上方跌破到下方
-  ✅ 一般日報:其餘標的的當日狀態
-  💼 投資組合損益(美股,USD):每天附在最後
-  ₿ BTC 持倉損益(TWD):每天附在最後
-
-通知方式:LINE Messaging API
-"""
-
 import os
 from datetime import datetime
-
 import requests
 import yfinance as yf
-
 
 # ===== 監控標的設定 =====
 TICKERS = {
@@ -52,35 +31,23 @@ TICKERS = {
     },
 }
 
-# ===== 美股持股設定(USD 損益計算用) =====
-# 更新方式:對照券商「複委託庫存」CSV
-#   shares   -> 「可用庫存」欄
-#   avg_cost -> 「均價」欄(已含手續費,即真實成本均價)
-# 或直接用 gen_holdings.py 由 CSV 自動產生後貼回此區塊。
-# 沒有持股的標的(如 BTC)不列入此處,BTC 由下方 BTC_HOLDING 獨立計算。
-# 來源:複委託庫存 20260610
+# ===== 美股持股設定 =====
 HOLDINGS = {
-"QQQ": {"shares": 1.1971, "avg_cost": 668.95},
-"TSLA": {"shares": 3.25416, "avg_cost": 400.676},
+    "QQQ": {"shares": 1.1971, "avg_cost": 668.95},
+    "TSLA": {"shares": 3.25416, "avg_cost": 400.676},
     "MRVL": {"shares": 4.00000, "avg_cost": 287.350},
 }
 
-# ===== BTC 持倉設定(TWD 損益計算用,與美股分開) =====
-# BTC 以台幣在交易所買進,與複委託美股不同貨幣/平台,故獨立計算。
-# 系統每天:現值(TWD) = amount × BTC-USD即時價 × USD/TWD即時匯率
-#           損益(TWD) = 現值 - cost_twd
-#   amount   -> 你錢包顯示的 BTC 數量
-#   cost_twd -> 投入成本(台幣)
-# amount 設為 0 則不顯示 BTC 損益(但 BTC 仍會照常做大跌/均線監控)。
+# ===== BTC 持倉設定 =====
 BTC_HOLDING = {
-    "amount": 0.00433356,   # ⚠️ 估算值(由錢包現值反推),請換成錢包實際 BTC 數量
-    "cost_twd": 10000.0,    # 投入成本(台幣),由錢包 ROI -11.56% 反推 ≈ 10000
+    "amount": 0.00433356,   
+    "cost_twd": 10000.0,    
 }
 
 MULTI_DAY_WINDOW = 5
 HIGH_POINT_WINDOW = 30
-MA_QUARTER = 60    # 季線 = 60 日均線
-MA_YEAR = 240      # 年線 = 240 日均線
+MA_QUARTER = 60    
+MA_YEAR = 240      
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_USER_IDS_RAW = os.environ.get("LINE_USER_IDS", "")
@@ -90,27 +57,46 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 
 def fetch_price_data(symbol: str, days: int = 260):
-    """抓取最近 N 個交易日的收盤價。需要 240+ 天才能算年線。"""
-    ticker = yf.Ticker(symbol)
-    hist = ticker.history(period=f"{days + 20}d")
-    if hist.empty:
+    """抓取最近 N 個交易日的收盤價，增強對剛收盤時 NaN 值的防禦。"""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="2y") # 改用穩定的固定 period 降低 API 報錯率
+        if hist.empty:
+            return None
+        
+        closes = hist["Close"].dropna()
+        
+        # 額外防禦：若剛好遇到收盤結算導致最新一筆遺失，嘗試抓取最新價格補回
+        try:
+            latest_live = ticker.fast_info['lastPrice']
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            if today_str not in closes.index.strftime('%Y-%m-%d') and latest_live:
+                from pandas import Series, Timestamp
+                closes[Timestamp(today_str)] = latest_live
+        except Exception:
+            pass
+            
+        return closes
+    except Exception as e:
+        print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
         return None
-    return hist["Close"].dropna()
 
 
 def fetch_usdtwd():
-    """抓 USD/TWD 即時匯率(1 美元 = ? 台幣)。失敗回傳 None。"""
-    try:
-        fx = yf.Ticker("TWD=X").history(period="5d")["Close"].dropna()
-        if not fx.empty:
-            return float(fx.iloc[-1])
-    except Exception as e:
-        print(f"[警告] 匯率(USD/TWD)抓取失敗:{e}")
+    """抓 USD/TWD 即時匯率，採多重代碼備援機制。"""
+    for symbol in ["USDTWD=X", "TWD=X"]:
+        try:
+            fx = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
+            if not fx.empty:
+                return float(fx.iloc[-1])
+        except Exception:
+            continue
+    print("[警告] 匯率(USD/TWD)所有備用管道抓取皆失敗")
     return None
 
 
 def calc_ma(closes, window: int):
-    """計算移動平均線。回傳最近 2 天的 MA 值(用來判斷是否剛跌破)。"""
+    """計算移動平均線。"""
     if len(closes) < window + 1:
         return None, None
     ma_series = closes.rolling(window=window).mean()
@@ -146,7 +132,6 @@ def analyze(name: str, config: dict):
     ma60_today, ma60_yesterday = calc_ma(closes, MA_QUARTER)
     broke_ma60 = False
     if ma60_today is not None and ma60_yesterday is not None:
-        # 跌破 = 昨天在上方(或等於),今天掉到下方
         broke_ma60 = (prev_price >= ma60_yesterday) and (latest_price < ma60_today)
 
     # === 年線(MA240) ===
@@ -164,7 +149,7 @@ def analyze(name: str, config: dict):
     is_alert = is_daily_alert or is_multi_day_alert
     is_watch = drawdown_pct <= config["watch_threshold"]
 
-    # === 目前相對季線/年線位置(用於日報顯示) ===
+    # === 目前相對季線/年線位置 ===
     vs_ma60 = None
     vs_ma240 = None
     if ma60_today is not None:
@@ -172,7 +157,7 @@ def analyze(name: str, config: dict):
     if ma240_today is not None:
         vs_ma240 = (latest_price - ma240_today) / ma240_today * 100
 
-    # === 美股持股損益(USD,若有部位) ===
+    # === 美股持股損益 ===
     h = HOLDINGS.get(name)
     holding = None
     if h and h["shares"] > 0:
@@ -216,7 +201,7 @@ def analyze(name: str, config: dict):
 
 
 def format_normal(result: dict) -> str:
-    """日報:價格/走勢 + 持股損益(若有)內嵌,一行一個資訊。"""
+    """日報格式。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -228,20 +213,18 @@ def format_normal(result: dict) -> str:
         f"   距高 {result['drawdown_pct']:+.2f}%",
     ]
 
-    # === 季線/年線壓一行 ===
     ma_line = ""
     if result["ma60"] is not None:
-        sign = "下" if result["vs_ma60"] < 0 else ""
+        sign = "下" if result["vs_ma60"] < 0 else "上"
         ma_line += f"季線{sign}{abs(result['vs_ma60']):.1f}%"
     if result["ma240"] is not None:
         if ma_line:
             ma_line += "  "
-        sign = "下" if result["vs_ma240"] < 0 else ""
+        sign = "下" if result["vs_ma240"] < 0 else "上"
         ma_line += f"年線{sign}{abs(result['vs_ma240']):.1f}%"
     if ma_line:
         lines.append(f"   {ma_line}")
 
-    # === 持股損益(若有) ===
     if result.get("holding"):
         h = result["holding"]
         lines.append(f"   持股 {h['shares']:.5f} 股")
@@ -257,22 +240,20 @@ def format_watch(result: dict) -> str:
     """觀察點提醒。"""
     lines = [
         f"📌 {result['name']} 觸發觀察點",
-        f"當前:{result['latest_price']:.2f}",
-        f"30 日高點:{result['high_30d']:.2f}({result['high_30d_date']})",
-        f"距高點:{result['drawdown_pct']:+.2f}%(觀察門檻 {result['watch_threshold']}%)",
-        f"當日:{result['daily_change_pct']:+.2f}%",
+        f"當前: {result['latest_price']:.2f}",
+        f"30 日高點: {result['high_30d']:.2f}({result['high_30d_date']})",
+        f"距高點: {result['drawdown_pct']:+.2f}%(觀察門檻 {result['watch_threshold']}%)",
+        f"當日: {result['daily_change_pct']:+.2f}%",
     ]
 
-    # 附帶均線位置
     if result["ma60"] is not None:
-        lines.append(f"季線(MA60):{result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
+        lines.append(f"季線(MA60): {result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
     if result["ma240"] is not None:
-        lines.append(f"年線(MA240):{result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
+        lines.append(f"年線(MA240): {result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
 
-    # 附帶持股損益
     if result["holding"]:
         h = result["holding"]
-        lines.append(f"持股損益:{h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+        lines.append(f"持股損益: {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
 
     lines.append("")
     lines.append("📍 已達到你設定的關注閾值,可評估市場狀況。")
@@ -290,9 +271,9 @@ def format_ma_break(result: dict) -> str:
             f"📉📉  {name} 跌破年線  📉📉",
             "⛔⛔⛔⛔⛔⛔⛔⛔⛔⛔",
             "",
-            f"💰 收盤:{result['latest_price']:.2f}",
-            f"📊 年線(MA240):{result['ma240']:.2f}",
-            f"📊 距年線:{result['vs_ma240']:+.2f}%",
+            f"💰 收盤: {result['latest_price']:.2f}",
+            f"📊 年線(MA240): {result['ma240']:.2f}",
+            f"📊 距年線: {result['vs_ma240']:+.2f}%",
             "",
             "⚠️ 股價從年線上方跌破到下方",
             "⚠️ 年線是長期多空分界,跌破代表中長期趨勢轉弱",
@@ -302,19 +283,18 @@ def format_ma_break(result: dict) -> str:
     if result["broke_ma60"]:
         lines.extend([
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
-            f"📉📉  {name} 跌破季線  📉📉",
+            f"📉📉  {name} 跌破季線  📉痕",
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
             "",
-            f"💰 收盤:{result['latest_price']:.2f}",
-            f"📊 季線(MA60):{result['ma60']:.2f}",
-            f"📊 距季線:{result['vs_ma60']:+.2f}%",
+            f"💰 收盤: {result['latest_price']:.2f}",
+            f"📊 季線(MA60): {result['ma60']:.2f}",
+            f"📊 距季線: {result['vs_ma60']:+.2f}%",
             "",
             "⚠️ 股價從季線上方跌破到下方",
             "⚠️ 季線是中期趨勢支撐,跌破需留意後續走勢",
             "━━━━━━━━━━━━━━━",
         ])
 
-    # 附帶持股損益(若有部位)
     if result["holding"]:
         h = result["holding"]
         lines.append(f"💼 持股 {h['shares']:.5f} 股")
@@ -323,6 +303,7 @@ def format_ma_break(result: dict) -> str:
         sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
         lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
     return "\n".join(lines)
+
 
 def format_alert(result: dict) -> str:
     """觸發大跌:強化版顯示。"""
@@ -334,24 +315,20 @@ def format_alert(result: dict) -> str:
         f"🔻🔻  跌幅 {daily:+.2f}%  🔻🔻",
         "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨",
         "",
-        f"💰 收盤:{result['latest_price']:.2f}",
-        f"📊 前一日:{result['prev_price']:.2f}",
-        f"⛰️ 30 日高點:{result['high_30d']:.2f}({result['high_30d_date']})",
-        f"📉 距高點:{result['drawdown_pct']:+.2f}%",
+        f"💰 收盤: {result['latest_price']:.2f}",
+        f"📊 前一日: {result['prev_price']:.2f}",
+        f"⛰️ 30 日高點: {result['high_30d']:.2f}({result['high_30d_date']})",
+        f"📉 距高點: {result['drawdown_pct']:+.2f}%",
     ]
 
     if result["cumulative_change_pct"] is not None:
-        lines.append(
-            f"📅 近 {MULTI_DAY_WINDOW} 日累積:{result['cumulative_change_pct']:+.2f}%"
-        )
+        lines.append(f"📅 近 {MULTI_DAY_WINDOW} 日累積: {result['cumulative_change_pct']:+.2f}%")
 
-    # 附帶均線位置
     if result["ma60"] is not None:
-        lines.append(f"📊 季線(MA60):{result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
+        lines.append(f"📊 季線(MA60): {result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
     if result["ma240"] is not None:
-        lines.append(f"📊 年線(MA240):{result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
+        lines.append(f"📊 年線(MA240): {result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
 
-    # 附帶持股損益(美股,若有部位)
     if result["holding"]:
         h = result["holding"]
         lines.append(f"💼 持股 {h['shares']:.5f} 股")
@@ -371,7 +348,7 @@ def format_alert(result: dict) -> str:
 
 
 def format_portfolio(results: list) -> str:
-    """美股投資組合總計(無標題,作為日報尾部)。"""
+    """美股投資組合總計。"""
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
@@ -383,6 +360,8 @@ def format_portfolio(results: list) -> str:
 
     big = "🟢" if total_pnl >= 0 else "🔴"
     lines = [
+        "💼 美股投資組合總計 (USD)",
+        "─────────────",
         f"總成本 ${total_cost:.2f}",
         f"總現值 ${total_value:.2f}",
         f"{big} 總損益 ${total_pnl:+.2f}({total_pct:+.2f}%)",
@@ -391,7 +370,7 @@ def format_portfolio(results: list) -> str:
 
 
 def format_btc_holding(btc_result: dict, usdtwd) -> str:
-    """BTC 持倉損益(TWD,獨立計算)。每行一個資訊。"""
+    """BTC 持倉損益。"""
     if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
         return None
     if btc_result is None:
@@ -414,7 +393,7 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
         "─────────────",
         f"   持有 {amount:.8f} BTC",
         f"   幣價 US${btc_usd:,.0f}",
-        f"   匯率 {usdtwd:.2f}(USD/TWD)",
+        f"   匯率 {usdtwd:.2f} (USD/TWD)",
         f"   成本 NT${cost_twd:,.0f}",
         f"   現值 NT${value_twd:,.0f}",
         f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)",
@@ -423,33 +402,51 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
 
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息。美股標的在前,BTC 日報+持倉損益合併在最後。"""
+    """組裝完整訊息 (修正核心：依照標的狀態動態切換排版格式)。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
     btc_result = next((r for r in results if r["name"] == "BTC"), None)
 
-    sections = [f"📊 市場日報 ({today})"]
+    sections = [f"📊 市場日報 ({today})", "━━━━━━━━━━━━━━━"]
 
-    # === 美股標的日報 ===
+    # === 1. 美股標的日報 (動態格式) ===
     for r in stock_results:
-        sections.append(format_normal(r))
+        if r["is_alert"]:
+            sections.append(format_alert(r))
+        elif r["broke_ma60"] or r["broke_ma240"]:
+            sections.append(format_ma_break(r))
+        elif r["is_watch"]:
+            sections.append(format_watch(r))
+        else:
+            sections.append(format_normal(r))
 
-    # === 美股投資組合總計 ===
+    # === 2. BTC 日報 (動態格式) ===
+    if btc_result is not None:
+        if btc_result["is_alert"]:
+            sections.append(format_alert(btc_result))
+        elif btc_result["broke_ma60"] or btc_result["broke_ma240"]:
+            sections.append(format_ma_break(btc_result))
+        elif btc_result["is_watch"]:
+            sections.append(format_watch(btc_result))
+        else:
+            sections.append(format_normal(btc_result))
+
+    # === 3. 美股投資組合總計 ===
     portfolio = format_portfolio(stock_results)
     if portfolio:
-        sections.append("═════════════")
+        sections.append("=================")
         sections.append(portfolio)
 
-    # === BTC 日報 + 持倉損益合併 ===
+    # === 4. BTC 持倉損益總結 ===
     if btc_result is not None:
-        btc_lines = [format_normal(btc_result)]
         btc_holding_block = format_btc_holding(btc_result, usdtwd)
         if btc_holding_block:
-            btc_lines.append(btc_holding_block)
-        sections.append("\n".join(btc_lines))
+            sections.append("=================")
+            sections.append(btc_holding_block)
 
     return "\n\n".join(sections)
+
 
 def send_line_message(text: str) -> bool:
     """透過 LINE Messaging API push 訊息。"""
