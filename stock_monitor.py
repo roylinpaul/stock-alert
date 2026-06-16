@@ -60,8 +60,8 @@ TICKERS = {
 # 沒有持股的標的(如 BTC)不列入此處,BTC 由下方 BTC_HOLDING 獨立計算。
 # 來源:複委託庫存 20260610
 HOLDINGS = {
-    "QQQ":  {"shares": 1.06163, "avg_cost": 660.023},
-    "TSLA": {"shares": 3.01145, "avg_cost": 400.013},
+"QQQ": {"shares": 1.1971, "avg_cost": 668.95},
+"TSLA": {"shares": 3.25416, "avg_cost": 400.676},
     "MRVL": {"shares": 4.00000, "avg_cost": 287.350},
 }
 
