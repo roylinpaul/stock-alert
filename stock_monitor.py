@@ -17,12 +17,6 @@ TICKERS = {
         "multi_day_threshold": -10.0,
         "watch_threshold": -10.0,
     },
-    "MRVL": {
-        "symbol": "MRVL",
-        "daily_threshold": -5.0,
-        "multi_day_threshold": -10.0,
-        "watch_threshold": -10.0,
-    },
     "BTC": {
         "symbol": "BTC-USD",
         "daily_threshold": -8.0,
@@ -35,7 +29,6 @@ TICKERS = {
 HOLDINGS = {
     "QQQ": {"shares": 1.1971, "avg_cost": 668.95},
     "TSLA": {"shares": 3.25416, "avg_cost": 400.676},
-    "MRVL": {"shares": 4.00000, "avg_cost": 287.350},
 }
 
 # ===== BTC 持倉設定 =====
