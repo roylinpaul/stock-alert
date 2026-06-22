@@ -26,6 +26,7 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
+# 修正說明：已將 TSLA 錯誤的 3.2h5416 修正為 3.25416 (請依實際持股微調數字)
 HOLDINGS = {
     "QQQ": {"shares": 1.1971, "avg_cost": 668.95},
     "TSLA": {"shares": 3.25416, "avg_cost": 400.676},
@@ -39,7 +40,7 @@ BTC_HOLDING = {
 
 MULTI_DAY_WINDOW = 5
 HIGH_POINT_WINDOW = 30
-MA_QUARTER = 60    
+MA_QUARTER = 60      
 MA_YEAR = 240      
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
@@ -73,9 +74,10 @@ def fetch_price_data(symbol: str):
 
 def fetch_usdtwd():
     """抓 USD/TWD 即時匯率，採多重代碼備援機制。"""
+    # 修正說明：將 period 從 "5d" 放寬到 "1mo"，避免春節等長假休市導致抓不到資料
     for symbol in ["USDTWD=X", "TWD=X"]:
         try:
-            fx = yf.Ticker(symbol).history(period="5d")["Close"].dropna()
+            fx = yf.Ticker(symbol).history(period="1mo")["Close"].dropna()
             if not fx.empty:
                 return float(fx.iloc[-1])
         except Exception:
