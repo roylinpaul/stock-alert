@@ -5,6 +5,12 @@ import yfinance as yf
 
 # ===== 監控標的設定 =====
 TICKERS = {
+    "AVGO": {
+        "symbol": "AVGO",
+        "daily_threshold": -5.0,
+        "multi_day_threshold": -10.0,
+        "watch_threshold": -10.0,
+    },
     "QQQ": {
         "symbol": "QQQ",
         "daily_threshold": -5.0,
@@ -26,10 +32,11 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-# 修正說明：已將 TSLA 錯誤的 3.2h5416 修正為 3.25416 (請依實際持股微調數字)
+# 持股數據已依最新庫存更新（同一標的之定期定額與加碼批次已合併為加權平均成本）
 HOLDINGS = {
-    "QQQ": {"shares": 1.1971, "avg_cost": 668.95},
-    "TSLA": {"shares": 3.25416, "avg_cost": 400.676},
+    "AVGO": {"shares": 1.0, "avg_cost": 400.32},
+    "QQQ": {"shares": 2.1971, "avg_cost": 693.5506},
+    "TSLA": {"shares": 4.25416, "avg_cost": 397.2394},
 }
 
 # ===== BTC 持倉設定 =====
