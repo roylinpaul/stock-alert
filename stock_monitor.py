@@ -5,13 +5,7 @@ import yfinance as yf
 
 # ===== 監控標的設定 =====
 TICKERS = {
-    "AVGO": {
-        "symbol": "AVGO",
-        "daily_threshold": -5.0,
-        "multi_day_threshold": -10.0,
-        "watch_threshold": -10.0,
-    },
-    "QQQ": {
+        "QQQ": {
         "symbol": "QQQ",
         "daily_threshold": -5.0,
         "multi_day_threshold": -10.0,
@@ -34,8 +28,7 @@ TICKERS = {
 # ===== 美股持股設定 =====
 # 持股數據已依最新庫存更新（同一標的之定期定額與加碼批次已合併為加權平均成本）
 HOLDINGS = {
-    "AVGO": {"shares": 1.0, "avg_cost": 400.32},
-    "QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
+"QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
     "TSLA": {"shares": 4.65376, "avg_cost": 395.3837},
 }
 
