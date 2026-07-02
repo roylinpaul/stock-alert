@@ -5,7 +5,7 @@ import yfinance as yf
 
 # ===== 監控標的設定 =====
 TICKERS = {
-        "QQQ": {
+    "QQQ": {
         "symbol": "QQQ",
         "daily_threshold": -5.0,
         "multi_day_threshold": -10.0,
@@ -28,27 +28,26 @@ TICKERS = {
 # ===== 美股持股設定 =====
 # 持股數據已依最新庫存更新（同一標的之定期定額與加碼批次已合併為加權平均成本）
 HOLDINGS = {
-"QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
+    "QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
     "TSLA": {"shares": 4.65376, "avg_cost": 395.3837},
 }
 
 # ===== BTC 持倉設定 =====
 BTC_HOLDING = {
-    "amount": 0.00433356,   
-    "cost_twd": 10000.0,    
+    "amount": 0.00433356,
+    "cost_twd": 10000.0,
 }
 
 MULTI_DAY_WINDOW = 5
 HIGH_POINT_WINDOW = 30
-MA_QUARTER = 60      
-MA_YEAR = 240      
+MA_QUARTER = 60
+MA_YEAR = 240
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_USER_IDS_RAW = os.environ.get("LINE_USER_IDS", "")
 LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.strip()]
 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
-
 
 def fetch_price_data(symbol: str):
     """
@@ -61,16 +60,15 @@ def fetch_price_data(symbol: str):
         hist = ticker.history(period="2y", prepost=False)
         if hist.empty:
             return None
-        
+
         closes = hist["Close"].dropna()
         if len(closes) < 2:
             return None
-            
+
         return closes
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
         return None
-
 
 def fetch_usdtwd():
     """抓 USD/TWD 即時匯率，採多重代碼備援機制。"""
@@ -85,7 +83,6 @@ def fetch_usdtwd():
     print("[警告] 匯率(USD/TWD)所有備用管道抓取皆失敗")
     return None
 
-
 def calc_ma(closes, window: int):
     """計算移動平均線。"""
     if len(closes) < window + 1:
@@ -94,7 +91,6 @@ def calc_ma(closes, window: int):
     ma_today = ma_series.iloc[-1]
     ma_yesterday = ma_series.iloc[-2]
     return ma_today, ma_yesterday
-
 
 def analyze(name: str, config: dict):
     """分析單一標的。"""
@@ -105,7 +101,7 @@ def analyze(name: str, config: dict):
 
     latest_price = closes.iloc[-1]
     prev_price = closes.iloc[-2]
-    
+
     # 完全由常規收盤 K 線計算當日變動，不受盤前交易影響
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
 
@@ -192,7 +188,6 @@ def analyze(name: str, config: dict):
         "holding": holding,
     }
 
-
 def format_normal(result: dict) -> str:
     """一般日報格式。"""
     name = result["name"]
@@ -228,6 +223,47 @@ def format_normal(result: dict) -> str:
 
     return "\n".join(lines)
 
+def format_btc_merged(result: dict, usdtwd) -> str:
+    """BTC 一般日報格式，將幣價動態（含季線/年線）與台幣持倉損益合併為單一區塊。"""
+    daily = result["daily_change_pct"]
+    arrow = "📈" if daily >= 0 else "📉"
+
+    lines = [
+        f"{arrow} BTC 當日 {daily:+.2f}%",
+        f"   收盤 {result['latest_price']:.2f}",
+        f"   30日高 {result['high_30d']:.2f}({result['high_30d_date']})",
+        f"   距高 {result['drawdown_pct']:+.2f}%",
+    ]
+
+    ma_line = ""
+    if result["ma60"] is not None:
+        sign = "下" if result["vs_ma60"] < 0 else "上"
+        ma_line += f"季線{sign}{abs(result['vs_ma60']):.1f}%"
+    if result["ma240"] is not None:
+        if ma_line:
+            ma_line += "  "
+        sign = "下" if result["vs_ma240"] < 0 else "上"
+        ma_line += f"年線{sign}{abs(result['vs_ma240']):.1f}%"
+    if ma_line:
+        lines.append(f"   {ma_line}")
+
+    # === BTC 台幣持倉損益（合併於同一區塊）===
+    if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
+        amount = BTC_HOLDING["amount"]
+        cost_twd = BTC_HOLDING["cost_twd"]
+        if usdtwd is None:
+            lines.append("   ⚠️ 匯率抓取失敗，本次無法換算台幣損益")
+        else:
+            btc_usd = result["latest_price"]
+            value_twd = amount * btc_usd * usdtwd
+            pnl_twd = value_twd - cost_twd
+            pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
+            sign = "🟢" if pnl_twd >= 0 else "🔴"
+            lines.append(f"   成本 NT${cost_twd:,.0f}")
+            lines.append(f"   現值 NT${value_twd:,.0f}")
+            lines.append(f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)")
+
+    return "\n".join(lines)
 
 def format_watch(result: dict) -> str:
     """觀察點提醒格式。"""
@@ -252,7 +288,6 @@ def format_watch(result: dict) -> str:
     lines.append("📍 已達到你設定的關注閾值，可評估市場狀況。")
     return "\n".join(lines)
 
-
 def format_ma_break(result: dict) -> str:
     """跌破季線或年線的警示格式。"""
     name = result["name"]
@@ -261,7 +296,7 @@ def format_ma_break(result: dict) -> str:
     if result["broke_ma240"]:
         lines.extend([
             "⛔⛔⛔⛔⛔⛔⛔⛔⛔⛔",
-            f"📉📉  {name} 跌破年線  📉📉",
+            f"📉📉 {name} 跌破年線 📉📉",
             "⛔⛔⛔⛔⛔⛔⛔⛔⛔⛔",
             "",
             f"💰 收盤: {result['latest_price']:.2f}",
@@ -276,7 +311,7 @@ def format_ma_break(result: dict) -> str:
     if result["broke_ma60"]:
         lines.extend([
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
-            f"📉📉  {name} 跌破季線  📉📉",
+            f"📉📉 {name} 跌破季線 📉📉",
             "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
             "",
             f"💰 收盤: {result['latest_price']:.2f}",
@@ -297,15 +332,14 @@ def format_ma_break(result: dict) -> str:
         lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
     return "\n".join(lines)
 
-
 def format_alert(result: dict) -> str:
     """觸發大跌的強化版警示格式。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     lines = [
         "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨",
-        f"📉📉  {name} 大跌警示  📉📉",
-        f"🔻🔻  跌幅 {daily:+.2f}%  🔻🔻",
+        f"📉📉 {name} 大跌警示 📉📉",
+        f"🔻🔻 跌幅 {daily:+.2f}% 🔻🔻",
         "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨",
         "",
         f"💰 收盤: {result['latest_price']:.2f}",
@@ -339,7 +373,6 @@ def format_alert(result: dict) -> str:
     lines.append("━━━━━━━━━━━━━━━")
     return "\n".join(lines)
 
-
 def format_portfolio(results: list) -> str:
     """美股投資組合總計。"""
     held = [r for r in results if r.get("holding")]
@@ -360,7 +393,6 @@ def format_portfolio(results: list) -> str:
         f"{big} 總損益 ${total_pnl:+.2f}({total_pct:+.2f}%)",
     ]
     return "\n".join(lines)
-
 
 def format_btc_holding(btc_result: dict, usdtwd) -> str:
     """BTC 持倉損益（TWD）。"""
@@ -393,7 +425,6 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
     ]
     return "\n".join(lines)
 
-
 def build_message(results: list, usdtwd=None) -> str:
     """組裝完整訊息。"""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -414,16 +445,25 @@ def build_message(results: list, usdtwd=None) -> str:
         else:
             sections.append(format_normal(r))
 
-    # === 2. BTC 動態格式 ===
+    # === 2. BTC 動態格式（一般日報將幣價、季線/年線與台幣持倉損益合併為單一區塊）===
     if btc_result is not None:
         if btc_result["is_alert"]:
             sections.append(format_alert(btc_result))
+            btc_holding_block = format_btc_holding(btc_result, usdtwd)
+            if btc_holding_block:
+                sections.append(btc_holding_block)
         elif btc_result["broke_ma60"] or btc_result["broke_ma240"]:
             sections.append(format_ma_break(btc_result))
+            btc_holding_block = format_btc_holding(btc_result, usdtwd)
+            if btc_holding_block:
+                sections.append(btc_holding_block)
         elif btc_result["is_watch"]:
             sections.append(format_watch(btc_result))
+            btc_holding_block = format_btc_holding(btc_result, usdtwd)
+            if btc_holding_block:
+                sections.append(btc_holding_block)
         else:
-            sections.append(format_normal(btc_result))
+            sections.append(format_btc_merged(btc_result, usdtwd))
 
     # === 3. 美股投資組合總計 ===
     portfolio = format_portfolio(stock_results)
@@ -431,15 +471,7 @@ def build_message(results: list, usdtwd=None) -> str:
         sections.append("=================")
         sections.append(portfolio)
 
-    # === 4. BTC 持倉損益總結 ===
-    if btc_result is not None:
-        btc_holding_block = format_btc_holding(btc_result, usdtwd)
-        if btc_holding_block:
-            sections.append("=================")
-            sections.append(btc_holding_block)
-
     return "\n\n".join(sections)
-
 
 def send_line_message(text: str) -> bool:
     """透過 LINE Messaging API push 訊息。"""
@@ -471,7 +503,6 @@ def send_line_message(text: str) -> bool:
             print(f"[錯誤] 發送至 {user_id[:10]}... 例外:{e}")
 
     return success_count > 0
-
 
 def main():
     print(f"=== 監控執行於 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
@@ -522,7 +553,6 @@ def main():
     print("===================\n")
 
     send_line_message(message)
-
 
 if __name__ == "__main__":
     main()
