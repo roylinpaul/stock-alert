@@ -26,7 +26,6 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-# 持股數據已依最新庫存更新（同一標的之定期定額與加碼批次已合併為加權平均成本）
 HOLDINGS = {
     "QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
     "TSLA": {"shares": 4.65376, "avg_cost": 395.3837},
@@ -50,21 +49,15 @@ LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.stri
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 def fetch_price_data(symbol: str):
-    """
-    僅抓取純常規交易時間(Regular Market Hours)的收盤價歷史，
-    不引入任何盤前/盤後即時變動價，確保任何時間執行數據都一致。
-    """
+    """僅抓取純常規交易時間的收盤價歷史。"""
     try:
         ticker = yf.Ticker(symbol)
-        # 嚴格禁用 prepost (不導入盤前盤後)，直接抓官方結算的日 K 線歷史
         hist = ticker.history(period="2y", prepost=False)
         if hist.empty:
             return None
-
         closes = hist["Close"].dropna()
         if len(closes) < 2:
             return None
-
         return closes
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
@@ -72,7 +65,6 @@ def fetch_price_data(symbol: str):
 
 def fetch_usdtwd():
     """抓 USD/TWD 即時匯率，採多重代碼備援機制。"""
-    # 修正說明：將 period 從 "5d" 放寬到 "1mo"，避免春節等長假休市導致抓不到資料
     for symbol in ["USDTWD=X", "TWD=X"]:
         try:
             fx = yf.Ticker(symbol).history(period="1mo")["Close"].dropna()
@@ -102,7 +94,6 @@ def analyze(name: str, config: dict):
     latest_price = closes.iloc[-1]
     prev_price = closes.iloc[-2]
 
-    # 完全由常規收盤 K 線計算當日變動，不受盤前交易影響
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
 
     # === 30 日高點 ===
@@ -129,7 +120,6 @@ def analyze(name: str, config: dict):
     if ma240_today is not None and ma240_yesterday is not None:
         broke_ma240 = (prev_price >= ma240_yesterday) and (latest_price < ma240_today)
 
-    # === 判斷狀態 ===
     is_daily_alert = daily_change_pct <= config["daily_threshold"]
     is_multi_day_alert = (
         cumulative_change_pct is not None
@@ -138,7 +128,6 @@ def analyze(name: str, config: dict):
     is_alert = is_daily_alert or is_multi_day_alert
     is_watch = drawdown_pct <= config["watch_threshold"]
 
-    # === 目前相對季線/年線位置 ===
     vs_ma60 = None
     vs_ma240 = None
     if ma60_today is not None:
@@ -146,7 +135,6 @@ def analyze(name: str, config: dict):
     if ma240_today is not None:
         vs_ma240 = (latest_price - ma240_today) / ma240_today * 100
 
-    # === 美股持股損益 ===
     h = HOLDINGS.get(name)
     holding = None
     if h and h["shares"] > 0:
@@ -224,7 +212,7 @@ def format_normal(result: dict) -> str:
     return "\n".join(lines)
 
 def format_btc_merged(result: dict, usdtwd) -> str:
-    """BTC 一般日報格式，將幣價動態（含季線/年線）與台幣持倉損益合併為單一區塊。"""
+    """【已修改】BTC 一般日報格式：將台幣持倉數據精簡，直接合併於 BTC 區塊最下方。"""
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
 
@@ -247,7 +235,7 @@ def format_btc_merged(result: dict, usdtwd) -> str:
     if ma_line:
         lines.append(f"   {ma_line}")
 
-    # === BTC 台幣持倉損益（合併於同一區塊）===
+    # === BTC 台幣持倉數據直屬合併（依指定規格精簡欄位） ===
     if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
         amount = BTC_HOLDING["amount"]
         cost_twd = BTC_HOLDING["cost_twd"]
@@ -259,6 +247,8 @@ def format_btc_merged(result: dict, usdtwd) -> str:
             pnl_twd = value_twd - cost_twd
             pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
             sign = "🟢" if pnl_twd >= 0 else "🔴"
+            
+            # 僅保留您指定的精確三行台幣數據
             lines.append(f"   成本 NT${cost_twd:,.0f}")
             lines.append(f"   現值 NT${value_twd:,.0f}")
             lines.append(f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)")
@@ -274,16 +264,13 @@ def format_watch(result: dict) -> str:
         f"距高點: {result['drawdown_pct']:+.2f}%(觀察門檻 {result['watch_threshold']}%)",
         f"當日: {result['daily_change_pct']:+.2f}%",
     ]
-
     if result["ma60"] is not None:
         lines.append(f"季線(MA60): {result['ma60']:.2f}(距 {result['vs_ma60']:+.2f}%)")
     if result["ma240"] is not None:
         lines.append(f"年線(MA240): {result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
-
     if result["holding"]:
         h = result["holding"]
         lines.append(f"持股損益: {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
-
     lines.append("")
     lines.append("📍 已達到你設定的關注閾值，可評估市場狀況。")
     return "\n".join(lines)
@@ -395,15 +382,13 @@ def format_portfolio(results: list) -> str:
     return "\n".join(lines)
 
 def format_btc_holding(btc_result: dict, usdtwd) -> str:
-    """BTC 持倉損益（TWD）。"""
+    """【已修改】僅在 BTC 觸發非正常日報狀態（如大跌警示、破線）時，提供單獨的台幣庫存格式。"""
     if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
         return None
     if btc_result is None:
         return None
     if usdtwd is None:
-        return ("₿ BTC 持倉損益(台幣)\n"
-                "─────────────\n"
-                "   ⚠️ 匯率抓取失敗，本次無法換算台幣損益")
+        return "   ⚠️ 匯率抓取失敗，本次無法換算台幣損益"
 
     amount = BTC_HOLDING["amount"]
     cost_twd = BTC_HOLDING["cost_twd"]
@@ -413,12 +398,8 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
     pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
     sign = "🟢" if pnl_twd >= 0 else "🔴"
 
+    # 非正常狀態下也同步對齊您的新規格，去除不必要的雜訊行
     lines = [
-        "₿ BTC 持倉損益(台幣)",
-        "─────────────",
-        f"   持有 {amount:.8f} BTC",
-        f"   幣價 US${btc_usd:,.0f}",
-        f"   匯率 {usdtwd:.2f} (USD/TWD)",
         f"   成本 NT${cost_twd:,.0f}",
         f"   現值 NT${value_twd:,.0f}",
         f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)",
@@ -445,7 +426,7 @@ def build_message(results: list, usdtwd=None) -> str:
         else:
             sections.append(format_normal(r))
 
-    # === 2. BTC 動態格式（一般日報將幣價、季線/年線與台幣持倉損益合併為單一區塊）===
+    # === 2. BTC 動態格式（一般日報或特殊警示皆已將台幣數據與最新幣價區塊動態綁定）===
     if btc_result is not None:
         if btc_result["is_alert"]:
             sections.append(format_alert(btc_result))
@@ -470,6 +451,8 @@ def build_message(results: list, usdtwd=None) -> str:
     if portfolio:
         sections.append("=================")
         sections.append(portfolio)
+
+    # 【已修改】徹底移除底部原有的獨立 BTC 台幣持倉損益區塊程式碼，確保排版完全符合新規格
 
     return "\n\n".join(sections)
 
@@ -543,7 +526,7 @@ def main():
         except Exception as e:
             print(f"[錯誤] 處理 {name} 時發生例外:{e}")
 
-    if not results:
+    if not Outer_results := results:
         print("無任何資料,結束。")
         return
 
