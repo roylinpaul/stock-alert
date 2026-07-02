@@ -26,8 +26,9 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
+# 已依最新複委託庫存資料更新加權平均成本
 HOLDINGS = {
-    "QQQ": {"shares": 2.4726, "avg_cost": 697.0072},
+    "QQQ": {"shares": 2.4726, "avg_cost": 697.2418},
     "TSLA": {"shares": 4.65376, "avg_cost": 395.3837},
 }
 
@@ -212,7 +213,7 @@ def format_normal(result: dict) -> str:
     return "\n".join(lines)
 
 def format_btc_merged(result: dict, usdtwd) -> str:
-    """【已修改】BTC 一般日報格式：將台幣持倉數據精簡，直接合併於 BTC 區塊最下方。"""
+    """BTC 一般日報格式：將台幣持倉數據精簡，直接合併於 BTC 區塊最下方。"""
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
 
@@ -235,7 +236,7 @@ def format_btc_merged(result: dict, usdtwd) -> str:
     if ma_line:
         lines.append(f"   {ma_line}")
 
-    # === BTC 台幣持倉數據直屬合併（依指定規格精簡欄位） ===
+    # === BTC 台幣持倉數據直屬合併 ===
     if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
         amount = BTC_HOLDING["amount"]
         cost_twd = BTC_HOLDING["cost_twd"]
@@ -248,7 +249,6 @@ def format_btc_merged(result: dict, usdtwd) -> str:
             pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
             sign = "🟢" if pnl_twd >= 0 else "🔴"
             
-            # 僅保留您指定的精確三行台幣數據
             lines.append(f"   成本 NT${cost_twd:,.0f}")
             lines.append(f"   現值 NT${value_twd:,.0f}")
             lines.append(f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)")
@@ -382,7 +382,7 @@ def format_portfolio(results: list) -> str:
     return "\n".join(lines)
 
 def format_btc_holding(btc_result: dict, usdtwd) -> str:
-    """【已修改】僅在 BTC 觸發非正常日報狀態（如大跌警示、破線）時，提供單獨的台幣庫存格式。"""
+    """當 BTC 觸發特殊狀態時的台幣庫存格式。"""
     if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
         return None
     if btc_result is None:
@@ -398,7 +398,6 @@ def format_btc_holding(btc_result: dict, usdtwd) -> str:
     pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
     sign = "🟢" if pnl_twd >= 0 else "🔴"
 
-    # 非正常狀態下也同步對齊您的新規格，去除不必要的雜訊行
     lines = [
         f"   成本 NT${cost_twd:,.0f}",
         f"   現值 NT${value_twd:,.0f}",
@@ -426,7 +425,7 @@ def build_message(results: list, usdtwd=None) -> str:
         else:
             sections.append(format_normal(r))
 
-    # === 2. BTC 動態格式（一般日報或特殊警示皆已將台幣數據與最新幣價區塊動態綁定）===
+    # === 2. BTC 動態格式 ===
     if btc_result is not None:
         if btc_result["is_alert"]:
             sections.append(format_alert(btc_result))
@@ -451,8 +450,6 @@ def build_message(results: list, usdtwd=None) -> str:
     if portfolio:
         sections.append("=================")
         sections.append(portfolio)
-
-    # 【已修改】徹底移除底部原有的獨立 BTC 台幣持倉損益區塊程式碼，確保排版完全符合新規格
 
     return "\n\n".join(sections)
 
@@ -526,7 +523,8 @@ def main():
         except Exception as e:
             print(f"[錯誤] 處理 {name} 時發生例外:{e}")
 
-    if not Outer_results := results:
+    # 【已修復】移除帶有賦值運算式的錯誤語法，改採標準防禦型程式碼
+    if not results:
         print("無任何資料,結束。")
         return
 
