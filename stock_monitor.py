@@ -28,8 +28,8 @@ TICKERS = {
 # ===== 美股持股設定 =====
 # 已依最新複委託庫存資料更新加權平均成本
 HOLDINGS = {
-    "QQQ": {"shares": 2.61157, "avg_cost": 698.4306},
-    "TSLA": {"shares": 4.90565, "avg_cost": 395.4867},
+    "QQQ": {"shares": 2.74966, "avg_cost": 699.7592},
+    "TSLA": {"shares": 5.15598, "avg_cost": 395.6997},
 }
 
 # ===== BTC 持倉設定 =====
