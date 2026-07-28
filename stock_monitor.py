@@ -28,7 +28,7 @@ TICKERS = {
 # ===== 美股持股設定 =====
 # 已依最新複委託庫存資料更新加權平均成本
 HOLDINGS = {
-    "QQQ": {"shares": 2.74966, "avg_cost": 699.7592},
+    "QQQ": {"shares": 2.89429, "avg_cost": 699.376},
     "TSLA": {"shares": 6.15598, "avg_cost": 384.0948},
 }
 
