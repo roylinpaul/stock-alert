@@ -371,7 +371,11 @@ def format_watch(result: dict) -> str:
         lines.append(f"年線(MA240): {result['ma240']:.2f}(距 {result['vs_ma240']:+.2f}%)")
     if result["holding"]:
         h = result["holding"]
-        lines.append(f"持股損益: {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
+        lines.append(f"持股 {h['shares']:.5f} 股")
+        lines.append(f"均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
+        lines.append(f"現值 {h['market_value']:.2f}")
+        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
+        lines.append(f"{sign} 損益 {h['pnl_amount']:+.2f}({h['pnl_pct']:+.2f}%)")
     lines.append("")
     lines.append("📍 已達到你設定的關注閾值，可評估市場狀況。")
     return "\n".join(lines)
