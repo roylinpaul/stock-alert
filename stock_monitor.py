@@ -1,4 +1,8 @@
 import os
+import csv
+import glob
+import io
+import re
 from datetime import datetime
 import requests
 import yfinance as yf
@@ -26,11 +30,108 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-# 已依最新複委託庫存資料更新加權平均成本
-HOLDINGS = {
+# 持股改為「自動讀取」:執行時讀 holdings/ 內最新的複委託庫存 CSV,
+# 同一檔加總股數並計算加權平均成本,不再手動維護。
+# 由本機排程腳本每月把最新 CSV 上傳到 holdings/,GitHub Actions 下次跑就自動套用。
+HOLDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings")
+
+# 找不到 / 讀不到 CSV 時的後備持股(最後一次已知值),確保 LINE 推播永不中斷。
+DEFAULT_HOLDINGS = {
     "QQQ": {"shares": 2.89429, "avg_cost": 699.376},
     "TSLA": {"shares": 6.15598, "avg_cost": 384.0948},
 }
+
+
+def _to_num(x):
+    """把券商 CSV 的數字字串(可能含千分位逗號與引號)轉成 float。"""
+    if x is None:
+        return 0.0
+    s = str(x).replace(",", "").replace('"', "").strip()
+    if not s or s == "-":
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _pick_latest_csv(folder):
+    """挑出 holdings/ 內最新的庫存 CSV。優先用檔名時間戳(複委託庫存YYYYMMDDHHMMSS.csv),
+    其次用檔案修改時間。"""
+    files = glob.glob(os.path.join(folder, "*.csv"))
+    if not files:
+        return None
+    cand = [f for f in files if "複委託庫存" in os.path.basename(f)]
+    if not cand:
+        cand = files
+
+    def sort_key(f):
+        m = re.search(r"(\d{14})", os.path.basename(f))
+        ts = int(m.group(1)) if m else 0
+        return (ts, os.path.getmtime(f))
+
+    return max(cand, key=sort_key)
+
+
+def load_holdings():
+    """從 holdings/ 讀取最新複委託庫存 CSV,回傳 {代號: {shares, avg_cost}}。
+    任何錯誤都回退 DEFAULT_HOLDINGS。"""
+    try:
+        path = _pick_latest_csv(HOLDINGS_DIR)
+        if not path:
+            print("[持股] 未找到庫存 CSV,使用內建預設值")
+            return dict(DEFAULT_HOLDINGS)
+
+        raw = None
+        for enc in ("utf-8-sig", "cp950", "big5"):
+            try:
+                with io.open(path, encoding=enc, newline="") as f:
+                    raw = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if raw is None:
+            print(f"[持股] 無法解碼 {os.path.basename(path)},使用內建預設值")
+            return dict(DEFAULT_HOLDINGS)
+
+        agg = {}
+        for row in csv.DictReader(io.StringIO(raw)):
+            code = (row.get("代號") or "").strip().strip('"')
+            if not code:
+                continue
+            shares = _to_num(row.get("目前庫存"))
+            if shares <= 0:
+                continue
+            cost = _to_num(row.get("庫存成本"))
+            if cost <= 0:  # 後備:用 均價 × 股數 推算成本
+                cost = shares * _to_num(row.get("均價"))
+            a = agg.setdefault(code, {"shares": 0.0, "cost": 0.0})
+            a["shares"] += shares
+            a["cost"] += cost
+
+        holdings = {
+            code: {"shares": a["shares"], "avg_cost": a["cost"] / a["shares"]}
+            for code, a in agg.items()
+            if a["shares"] > 0
+        }
+        if not holdings:
+            print(f"[持股] {os.path.basename(path)} 無有效持股列,使用內建預設值")
+            return dict(DEFAULT_HOLDINGS)
+
+        print(
+            f"[持股] 已從 {os.path.basename(path)} 載入:"
+            + ", ".join(
+                f"{k} {v['shares']:.5f}股@{v['avg_cost']:.2f}"
+                for k, v in holdings.items()
+            )
+        )
+        return holdings
+    except Exception as e:
+        print(f"[持股] 讀取庫存 CSV 發生例外:{e},使用內建預設值")
+        return dict(DEFAULT_HOLDINGS)
+
+
+HOLDINGS = load_holdings()
 
 # ===== BTC 持倉設定 =====
 BTC_HOLDING = {
