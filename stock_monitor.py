@@ -135,8 +135,8 @@ HOLDINGS = load_holdings()
 
 # ===== BTC 持倉設定 =====
 BTC_HOLDING = {
-    "amount": 0.00433356,
-    "cost_twd": 10000.0,
+    "amount": 0.00585807,
+    "cost_twd": 13000.0,
 }
 
 MULTI_DAY_WINDOW = 5
