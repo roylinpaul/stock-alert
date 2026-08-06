@@ -351,6 +351,8 @@ def format_btc_merged(result: dict, usdtwd) -> str:
             sign = "🟢" if pnl_twd >= 0 else "🔴"
             
             lines.append(f"   成本 NT${cost_twd:,.0f}")
+            avg_price_usd = (cost_twd / usdtwd / amount) if (usdtwd and amount) else 0.0
+            lines.append(f"   均價 ${avg_price_usd:,.2f}")
             lines.append(f"   現值 NT${value_twd:,.0f}")
             lines.append(f"   {sign} 損益 NT${pnl_twd:+,.0f}({pnl_pct:+.2f}%)")
 
