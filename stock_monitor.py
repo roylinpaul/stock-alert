@@ -586,7 +586,7 @@ def format_portfolio(results: list) -> str:
     return "\n".join(lines)
 
 def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息。"""
+    """組裝完整訊息（純庫存提示，不再判斷警示）。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
@@ -595,33 +595,10 @@ def build_message(results: list, usdtwd=None) -> str:
     sections = [f"📊 市場日報 ({today})", "━━━━━━━━━━━━━━━"]
 
     for r in stock_results:
-        if r["is_alert"]:
-            sections.append(format_alert(r))
-        elif r["broke_ma60"] or r["broke_ma240"]:
-            sections.append(format_ma_break(r))
-        elif r["is_watch"]:
-            sections.append(format_watch(r))
-        else:
-            sections.append(format_normal(r))
+        sections.append(format_normal(r))
 
     if btc_result is not None:
-        if btc_result["is_alert"]:
-            sections.append(format_alert(btc_result))
-            block = format_btc_twd_holding(btc_result)
-            if block:
-                sections.append(block)
-        elif btc_result["broke_ma60"] or btc_result["broke_ma240"]:
-            sections.append(format_ma_break(btc_result))
-            block = format_btc_twd_holding(btc_result)
-            if block:
-                sections.append(block)
-        elif btc_result["is_watch"]:
-            sections.append(format_watch(btc_result))
-            block = format_btc_twd_holding(btc_result)
-            if block:
-                sections.append(block)
-        else:
-            sections.append(format_btc_merged(btc_result))
+        sections.append(format_btc_merged(btc_result))
 
     portfolio = format_portfolio(stock_results)
     if portfolio:
