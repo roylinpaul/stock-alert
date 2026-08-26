@@ -33,8 +33,8 @@ TICKERS = {
 HOLDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings")
 
 DEFAULT_HOLDINGS = {
-    "QQQ": {"shares": 2.89429, "avg_cost": 699.376},
-    "TSLA": {"shares": 6.15598, "avg_cost": 384.0948},
+        "QQQ": {"shares": 3.30903, "avg_cost": 702.4717},
+        "TSLA": {"shares": 7.04474, "avg_cost": 378.2652},
 }
 
 def _to_num(x):
