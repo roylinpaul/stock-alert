@@ -33,8 +33,8 @@ TICKERS = {
 HOLDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings")
 
 DEFAULT_HOLDINGS = {
-        "QQQ": {"shares": 3.30903, "avg_cost": 702.4717},
-        "TSLA": {"shares": 7.04474, "avg_cost": 378.2652},
+    "QQQ": {"shares": 3.30903, "avg_cost": 702.4717},
+    "TSLA": {"shares": 7.04474, "avg_cost": 378.2652},
 }
 
 def _to_num(x):
@@ -131,7 +131,7 @@ HIGH_POINT_WINDOW = 30
 MA_QUARTER = 60
 MA_YEAR = 240
 
-# ===== MAX 交易所 API（BTC/TWD 台幣計價資料源）=====
+# ===== MAX 交易所 API =====
 MAX_API_BASE = "https://max-api.maicoin.com/api/v2"
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
@@ -155,7 +155,7 @@ def fetch_price_data(symbol: str):
         return None
 
 def fetch_max_btc_twd():
-    """從 MAX 交易所抓 BTC/TWD 即時行情與日K，全部以台幣計價。"""
+    """從 MAX 交易所抓 BTC/TWD 即時行情與日K，包含 USD 參考價與匯率。"""
     try:
         t = requests.get(f"{MAX_API_BASE}/tickers/btctwd", timeout=10).json()
         last = float(t["last"])
@@ -169,13 +169,16 @@ def fetch_max_btc_twd():
         closes = [float(row[4]) for row in k]
 
         btc_usd = None
+        usdtwd = 32.0  # 備用匯率
         try:
             tu = requests.get(f"{MAX_API_BASE}/tickers/btcusdt", timeout=10).json()
             btc_usd = float(tu["last"])
+            if btc_usd > 0:
+                usdtwd = last / btc_usd
         except Exception:
             pass
 
-        return {"last": last, "open": open_p, "closes": closes, "btc_usd": btc_usd}
+        return {"last": last, "open": open_p, "closes": closes, "btc_usd": btc_usd, "usdtwd": usdtwd}
     except Exception as e:
         print(f"[錯誤] 抓取 MAX BTC/TWD 失敗: {e}")
         return None
@@ -277,7 +280,7 @@ def analyze(name: str, config: dict):
     }
 
 def analyze_btc_twd(config: dict, max_data: dict):
-    """以 MAX BTC/TWD 台幣資料分析 BTC（全部台幣計價）。"""
+    """以 MAX BTC/TWD 台幣資料分析 BTC（包含 USD 計算持倉）。"""
     closes = max_data["closes"]
     if not closes or len(closes) < 2:
         return None
@@ -314,6 +317,32 @@ def analyze_btc_twd(config: dict, max_data: dict):
     )
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
 
+    # 計算 BTC 持倉數據 (包含 TWD 與換算為 USD 的部分)
+    btc_holding_data = None
+    if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
+        amount = BTC_HOLDING["amount"]
+        cost_twd = BTC_HOLDING["cost_twd"]
+        value_twd = amount * latest_price
+        pnl_twd = value_twd - cost_twd
+        
+        usdtwd = max_data.get("usdtwd", 32.0)
+        cost_usd = cost_twd / usdtwd
+        btc_usd = max_data.get("btc_usd") or (latest_price / usdtwd)
+        market_value_usd = amount * btc_usd
+        pnl_usd = market_value_usd - cost_usd
+        pnl_pct = (pnl_usd / cost_usd * 100) if cost_usd else 0.0
+
+        btc_holding_data = {
+            "amount": amount,
+            "cost_twd": cost_twd,
+            "value_twd": value_twd,
+            "pnl_twd": pnl_twd,
+            "cost_basis": cost_usd,       # USD 成本
+            "market_value": market_value_usd, # USD 現值
+            "pnl_amount": pnl_usd,         # USD 損益
+            "pnl_pct": pnl_pct,
+        }
+
     return {
         "name": "BTC",
         "latest_price": latest_price,
@@ -337,7 +366,8 @@ def analyze_btc_twd(config: dict, max_data: dict):
         "multi_day_threshold": config["multi_day_threshold"],
         "watch_threshold": config["watch_threshold"],
         "btc_usd": max_data.get("btc_usd"),
-        "holding": None,
+        "usdtwd": max_data.get("usdtwd"),
+        "holding": btc_holding_data,
     }
 
 def _loss_desc(pnl_pct: float) -> str:
@@ -363,31 +393,26 @@ def _loss_desc(pnl_pct: float) -> str:
             return "賬面大幅浮虧"
 
 def format_btc_twd_holding(result: dict) -> str:
-    """BTC 台幣持倉明細，供所有 BTC 訊息格式共用。"""
-    if not BTC_HOLDING or BTC_HOLDING.get("amount", 0) <= 0:
+    """BTC 台幣持倉明細。"""
+    if not result.get("holding"):
         return None
-    amount = BTC_HOLDING["amount"]
-    cost_twd = BTC_HOLDING["cost_twd"]
+    h = result["holding"]
     price_twd = result["latest_price"]
-
-    avg_price_twd = cost_twd / amount if amount else 0.0
-    value_twd = amount * price_twd
-    pnl_twd = value_twd - cost_twd
-    pnl_pct = (pnl_twd / cost_twd * 100) if cost_twd else 0.0
-    sign = "🟢" if pnl_twd >= 0 else "🔴"
-    desc = _loss_desc(pnl_pct)
+    avg_price_twd = h["cost_twd"] / h["amount"] if h["amount"] else 0.0
+    sign = "🟢" if h["pnl_twd"] >= 0 else "🔴"
+    desc = _loss_desc(h["pnl_pct"])
 
     usd_note = ""
     if result.get("btc_usd"):
         usd_note = f"（折合約 ${result['btc_usd']:,.0f} 美元）"
 
     return "\n".join([
-        f"   持有數量 {amount:.8f} BTC",
-        f"   投入成本 NT${cost_twd:,.2f}",
+        f"   持有數量 {h['amount']:.8f} BTC",
+        f"   投入成本 NT${h['cost_twd']:,.2f}",
         f"   買入均價 NT${avg_price_twd:,.0f}/BTC",
         f"   市場單價 NT${price_twd:,.0f}/BTC{usd_note}",
-        f"   現值 NT${value_twd:,.2f}",
-        f"   {sign} 損益 {pnl_pct:+.2f}%（{desc} NT${pnl_twd:+,.2f}）",
+        f"   現值 NT${h['value_twd']:,.2f}",
+        f"   {sign} 損益 {h['pnl_pct']:+.2f}%（{desc} NT${h['pnl_twd']:+,.2f}）",
     ])
 
 def format_normal(result: dict) -> str:
@@ -425,7 +450,7 @@ def format_normal(result: dict) -> str:
 
     return "\n".join(lines)
 
-def format_btc_merged(result: dict, usdtwd=None) -> str:
+def format_btc_merged(result: dict) -> str:
     """BTC 一般日報（台幣計價，資料來自 MAX）。"""
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -455,117 +480,8 @@ def format_btc_merged(result: dict, usdtwd=None) -> str:
 
     return "\n".join(lines)
 
-def format_watch(result: dict) -> str:
-    """觀察點提醒格式。"""
-    lines = [
-        f"📌 {result['name']} 觸發觀察點",
-        f"當前: {result['latest_price']:.2f}",
-        f"30 日高點: {result['high_30d']:.2f}（{result['high_30d_date']}）",
-        f"距高點: {result['drawdown_pct']:+.2f}%（觀察門檻 {result['watch_threshold']}%）",
-        f"當日: {result['daily_change_pct']:+.2f}%",
-    ]
-    if result["ma60"] is not None:
-        lines.append(f"季線(MA60): {result['ma60']:.2f}（距 {result['vs_ma60']:+.2f}%）")
-    if result["ma240"] is not None:
-        lines.append(f"年線(MA240): {result['ma240']:.2f}（距 {result['vs_ma240']:+.2f}%）")
-    if result["holding"]:
-        h = result["holding"]
-        lines.append(f"持股 {h['shares']:.5f} 股")
-        lines.append(f"均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
-        lines.append(f"現值 {h['market_value']:.2f}")
-        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-        lines.append(f"{sign} 損益 {h['pnl_amount']:+.2f}（{h['pnl_pct']:+.2f}%）")
-    lines.append("")
-    lines.append("📍 已達到你設定的關注閾值，可評估市場狀況。")
-    return "\n".join(lines)
-
-def format_ma_break(result: dict) -> str:
-    """跌破季線或年線的警示格式。"""
-    name = result["name"]
-    lines = []
-
-    if result["broke_ma240"]:
-        lines.extend([
-            "⛔⛔⛔⛔⛔⛔⛔⛔⛔⛔",
-            f"📉📉 {name} 跌破年線 📉📉",
-            "⛔⛔⛔⛔⛔⛔⛔⛔⛔⛔",
-            "",
-            f"💰 收盤: {result['latest_price']:.2f}",
-            f"📊 年線(MA240): {result['ma240']:.2f}",
-            f"📊 距年線: {result['vs_ma240']:+.2f}%",
-            "",
-            "⚠️ 價格從年線上方跌破到下方",
-            "⚠️ 年線是長期多空分界，跌破代表中長期趨勢轉弱",
-            "━━━━━━━━━━━━━━━",
-        ])
-
-    if result["broke_ma60"]:
-        lines.extend([
-            "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
-            f"📉📉 {name} 跌破季線 📉📉",
-            "⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️",
-            "",
-            f"💰 收盤: {result['latest_price']:.2f}",
-            f"📊 季線(MA60): {result['ma60']:.2f}",
-            f"📊 距季線: {result['vs_ma60']:+.2f}%",
-            "",
-            "⚠️ 價格從季線上方跌破到下方",
-            "⚠️ 季線是中期趨勢支撐，跌破需留意後續走勢",
-            "━━━━━━━━━━━━━━━",
-        ])
-
-    if result["holding"]:
-        h = result["holding"]
-        lines.append(f"💼 持股 {h['shares']:.5f} 股")
-        lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
-        lines.append(f"   現值 {h['market_value']:.2f}")
-        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-        lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}（{h['pnl_pct']:+.2f}%）")
-    return "\n".join(lines)
-
-def format_alert(result: dict) -> str:
-    """觸發大跌的強化版警示格式。"""
-    name = result["name"]
-    daily = result["daily_change_pct"]
-    lines = [
-        "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨",
-        f"📉📉 {name} 大跌警示 📉📉",
-        f"🔻🔻 跌幅 {daily:+.2f}% 🔻🔻",
-        "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨",
-        "",
-        f"💰 收盤: {result['latest_price']:.2f}",
-        f"📊 前一日: {result['prev_price']:.2f}",
-        f"⛰️ 30 日高點: {result['high_30d']:.2f}（{result['high_30d_date']}）",
-        f"📉 距高點: {result['drawdown_pct']:+.2f}%",
-    ]
-
-    if result["cumulative_change_pct"] is not None:
-        lines.append(f"📅 近 {MULTI_DAY_WINDOW} 日累積: {result['cumulative_change_pct']:+.2f}%")
-
-    if result["ma60"] is not None:
-        lines.append(f"📊 季線(MA60): {result['ma60']:.2f}（距 {result['vs_ma60']:+.2f}%）")
-    if result["ma240"] is not None:
-        lines.append(f"📊 年線(MA240): {result['ma240']:.2f}（距 {result['vs_ma240']:+.2f}%）")
-
-    if result["holding"]:
-        h = result["holding"]
-        lines.append(f"💼 持股 {h['shares']:.5f} 股")
-        lines.append(f"   均價 {h['avg_cost']:.2f} 成本 {h['cost_basis']:.2f}")
-        lines.append(f"   現值 {h['market_value']:.2f}")
-        sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
-        lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}（{h['pnl_pct']:+.2f}%）")
-
-    lines.append("")
-    if result["is_daily_alert"]:
-        lines.append(f"⚠️ 當日跌幅突破門檻 ({result['daily_threshold']}%)")
-    if result["is_multi_day_alert"]:
-        lines.append(f"⚠️ 累積跌幅突破門檻 ({result['multi_day_threshold']}%)")
-
-    lines.append("━━━━━━━━━━━━━━━")
-    return "\n".join(lines)
-
-def format_portfolio(results: list) -> str:
-    """美股投資組合總計。"""
+def format_total_portfolio(results: list) -> str:
+    """資產投資組合總計（包含美股與 BTC，換算 USD 統計）。"""
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
@@ -577,7 +493,7 @@ def format_portfolio(results: list) -> str:
 
     big = "🟢" if total_pnl >= 0 else "🔴"
     lines = [
-        "💼 美股投資組合總計 (USD)",
+        "💼 總投資組合總計 (含BTC, USD)",
         "─────────────",
         f"總成本 ${total_cost:.2f}",
         f"總現值 ${total_value:.2f}",
@@ -585,8 +501,8 @@ def format_portfolio(results: list) -> str:
     ]
     return "\n".join(lines)
 
-def build_message(results: list, usdtwd=None) -> str:
-    """組裝完整訊息（純庫存提示，不再判斷警示）。"""
+def build_message(results: list) -> str:
+    """組裝完整訊息。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
@@ -600,7 +516,8 @@ def build_message(results: list, usdtwd=None) -> str:
     if btc_result is not None:
         sections.append(format_btc_merged(btc_result))
 
-    portfolio = format_portfolio(stock_results)
+    # 傳入包含美股與 BTC 的完整 results 計算總計
+    portfolio = format_total_portfolio(results)
     if portfolio:
         sections.append("=================")
         sections.append(portfolio)
@@ -673,7 +590,7 @@ def main():
                 if r["vs_ma240"] is not None:
                     ma_info += f" MA240:{r['ma240']:.1f}({r['vs_ma240']:+.1f}%)"
                 pnl_info = ""
-                if r["holding"]:
+                if r.get("holding"):
                     pnl_info = f" 損益:{r['holding']['pnl_amount']:+.2f}({r['holding']['pnl_pct']:+.2f}%)"
                 print(
                     f"[{status}] {name} 當日 {r['daily_change_pct']:+.2f}%, "
