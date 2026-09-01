@@ -337,9 +337,9 @@ def analyze_btc_twd(config: dict, max_data: dict):
             "cost_twd": cost_twd,
             "value_twd": value_twd,
             "pnl_twd": pnl_twd,
-            "cost_basis": cost_usd,       # USD 成本
+            "cost_basis": cost_usd,           # USD 成本
             "market_value": market_value_usd, # USD 現值
-            "pnl_amount": pnl_usd,         # USD 損益
+            "pnl_amount": pnl_usd,             # USD 損益
             "pnl_pct": pnl_pct,
         }
 
@@ -416,7 +416,7 @@ def format_btc_twd_holding(result: dict) -> str:
     ])
 
 def format_normal(result: dict) -> str:
-    """一般日報格式（美股，美元計價）。"""
+    """一般日報格式（美股，美元計價，已移除高點、距高、均線資訊）。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -424,21 +424,7 @@ def format_normal(result: dict) -> str:
     lines = [
         f"{arrow} {name} 當日 {daily:+.2f}%",
         f"   收盤 {result['latest_price']:.2f}",
-        f"   30日高 {result['high_30d']:.2f}（{result['high_30d_date']}）",
-        f"   距高 {result['drawdown_pct']:+.2f}%",
     ]
-
-    ma_line = ""
-    if result["ma60"] is not None:
-        sign = "下" if result["vs_ma60"] < 0 else "上"
-        ma_line += f"季線{sign}{abs(result['vs_ma60']):.1f}%"
-    if result["ma240"] is not None:
-        if ma_line:
-            ma_line += " "
-        sign = "下" if result["vs_ma240"] < 0 else "上"
-        ma_line += f"年線{sign}{abs(result['vs_ma240']):.1f}%"
-    if ma_line:
-        lines.append(f"   {ma_line}")
 
     if result.get("holding"):
         h = result["holding"]
@@ -451,28 +437,20 @@ def format_normal(result: dict) -> str:
     return "\n".join(lines)
 
 def format_btc_merged(result: dict) -> str:
-    """BTC 一般日報（台幣計價，資料來自 MAX）。"""
+    """BTC 一般日報（收盤改為美元，已移除高點、距高、均線資訊）。"""
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
 
+    btc_usd_price = result.get("btc_usd")
+    if btc_usd_price is None and result.get("usdtwd"):
+        btc_usd_price = result["latest_price"] / result["usdtwd"]
+    elif btc_usd_price is None:
+        btc_usd_price = 0.0
+
     lines = [
         f"{arrow} BTC 當日 {daily:+.2f}%",
-        f"   收盤 NT${result['latest_price']:,.0f}",
-        f"   30日高 NT${result['high_30d']:,.0f}",
-        f"   距高 {result['drawdown_pct']:+.2f}%",
+        f"   收盤 ${btc_usd_price:,.2f}",
     ]
-
-    ma_line = ""
-    if result["ma60"] is not None:
-        sign = "下" if result["vs_ma60"] < 0 else "上"
-        ma_line += f"季線{sign}{abs(result['vs_ma60']):.1f}%"
-    if result["ma240"] is not None:
-        if ma_line:
-            ma_line += " "
-        sign = "下" if result["vs_ma240"] < 0 else "上"
-        ma_line += f"年線{sign}{abs(result['vs_ma240']):.1f}%"
-    if ma_line:
-        lines.append(f"   {ma_line}")
 
     holding_block = format_btc_twd_holding(result)
     if holding_block:
@@ -516,7 +494,6 @@ def build_message(results: list) -> str:
     if btc_result is not None:
         sections.append(format_btc_merged(btc_result))
 
-    # 傳入包含美股與 BTC 的完整 results 計算總計
     portfolio = format_total_portfolio(results)
     if portfolio:
         sections.append("=================")
