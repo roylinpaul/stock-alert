@@ -120,10 +120,10 @@ def load_holdings():
 
 HOLDINGS = load_holdings()
 
-# ===== BTC 持倉設定 =====
+# ===== BTC 持倉設定（已更新至最新 MAX 截圖數據） =====
 BTC_HOLDING = {
-    "amount": 0.00585807,
-    "cost_twd": 13000.0,
+    "amount": 0.00705226,
+    "cost_twd": 15996.30,
 }
 
 MULTI_DAY_WINDOW = 5
