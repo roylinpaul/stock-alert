@@ -36,10 +36,8 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-# 指定您的專屬庫存 CSV 資料夾路徑
 HOLDINGS_DIR = r"C:\Users\99109\Documents\庫存"
 
-# 備用預設值（已同步 2026/09/09 最新扣款入帳數據）
 DEFAULT_HOLDINGS = {
     "QQQ": {"shares": 3.44777, "avg_cost": 703.2372},
     "TSLA": {"shares": 7.32457, "avg_cost": 377.4802},
@@ -132,7 +130,7 @@ def load_holdings():
 
 HOLDINGS = load_holdings()
 
-# ===== BTC 持倉設定（已更新至最新 MAX 截圖數據） =====
+# ===== BTC 持倉設定 =====
 BTC_HOLDING = {
     "amount": 0.00705226,
     "cost_twd": 15996.30,
@@ -153,15 +151,32 @@ LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.stri
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 def fetch_price_data(symbol: str):
+    """取得歷史日K序列，並透過 fast_info 確保即時收盤價與昨日收盤價精準無延遲"""
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="2y", prepost=False)
-        if hist.empty:
+        if hist.empty or len(hist) < 2:
             return None
         closes = hist["Close"].dropna()
-        if len(closes) < 2:
-            return None
-        return closes
+
+        latest_price = None
+        prev_price = None
+        try:
+            fast = ticker.fast_info
+            latest_price = fast.get("last_price")
+            prev_price = fast.get("previous_close")
+        except Exception:
+            pass
+
+        if latest_price is None or prev_price is None:
+            latest_price = float(closes.iloc[-1])
+            prev_price = float(closes.iloc[-2])
+
+        return {
+            "closes": closes,
+            "latest_price": float(latest_price),
+            "prev_price": float(prev_price),
+        }
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
         return None
@@ -181,7 +196,7 @@ def fetch_max_btc_twd():
         closes = [float(row[4]) for row in k]
 
         btc_usd = None
-        usdtwd = 32.0  # 備用匯率
+        usdtwd = 32.0
         try:
             tu = requests.get(f"{MAX_API_BASE}/tickers/btcusdt", timeout=10).json()
             btc_usd = float(tu["last"])
@@ -205,18 +220,19 @@ def calc_ma(closes, window: int):
 
 def analyze(name: str, config: dict):
     """分析單一美股標的（yfinance，美元計價）。"""
-    closes = fetch_price_data(config["symbol"])
-    if closes is None or len(closes) < 2:
+    price_info = fetch_price_data(config["symbol"])
+    if price_info is None:
         print(f"[警告] {name} 資料不足，略過")
         return None
 
-    latest_price = closes.iloc[-1]
-    prev_price = closes.iloc[-2]
+    closes = price_info["closes"]
+    latest_price = price_info["latest_price"]
+    prev_price = price_info["prev_price"]
 
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
 
     hp_window = closes.iloc[-HIGH_POINT_WINDOW:] if len(closes) >= HIGH_POINT_WINDOW else closes
-    high_30d = hp_window.max()
+    high_30d = max(hp_window.max(), latest_price)
     high_30d_date = hp_window.idxmax().strftime("%m/%d")
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
 
@@ -243,12 +259,8 @@ def analyze(name: str, config: dict):
     is_alert = is_daily_alert or is_multi_day_alert
     is_watch = drawdown_pct <= config["watch_threshold"]
 
-    vs_ma60 = None
-    vs_ma240 = None
-    if ma60_today is not None:
-        vs_ma60 = (latest_price - ma60_today) / ma60_today * 100
-    if ma240_today is not None:
-        vs_ma240 = (latest_price - ma240_today) / ma240_today * 100
+    vs_ma60 = (latest_price - ma60_today) / ma60_today * 100 if ma60_today else None
+    vs_ma240 = (latest_price - ma240_today) / ma240_today * 100 if ma240_today else None
 
     h = HOLDINGS.get(name)
     holding = None
@@ -329,7 +341,6 @@ def analyze_btc_twd(config: dict, max_data: dict):
     )
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
 
-    # 計算 BTC 持倉數據 (包含 TWD 與換算為 USD 的部分)
     btc_holding_data = None
     if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
         amount = BTC_HOLDING["amount"]
@@ -349,9 +360,9 @@ def analyze_btc_twd(config: dict, max_data: dict):
             "cost_twd": cost_twd,
             "value_twd": value_twd,
             "pnl_twd": pnl_twd,
-            "cost_basis": cost_usd,           # USD 成本
-            "market_value": market_value_usd, # USD 現值
-            "pnl_amount": pnl_usd,             # USD 損益
+            "cost_basis": cost_usd,
+            "market_value": market_value_usd,
+            "pnl_amount": pnl_usd,
             "pnl_pct": pnl_pct,
         }
 
@@ -383,7 +394,6 @@ def analyze_btc_twd(config: dict, max_data: dict):
     }
 
 def _loss_desc(pnl_pct: float) -> str:
-    """依損益幅度自動產生文字描述。"""
     if pnl_pct >= 0:
         if pnl_pct < 3:
             return "賬面微幅浮盈"
@@ -405,7 +415,6 @@ def _loss_desc(pnl_pct: float) -> str:
             return "賬面大幅浮虧"
 
 def format_btc_twd_holding(result: dict) -> str:
-    """BTC 台幣持倉明細。"""
     if not result.get("holding"):
         return None
     h = result["holding"]
@@ -428,7 +437,6 @@ def format_btc_twd_holding(result: dict) -> str:
     ])
 
 def format_normal(result: dict) -> str:
-    """一般日報格式（美股，美元計價，已移除高點、距高、均線資訊）。"""
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
@@ -449,7 +457,6 @@ def format_normal(result: dict) -> str:
     return "\n".join(lines)
 
 def format_btc_merged(result: dict) -> str:
-    """BTC 一般日報（收盤改為美元，已移除高點、距高、均線資訊）。"""
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
 
@@ -471,7 +478,6 @@ def format_btc_merged(result: dict) -> str:
     return "\n".join(lines)
 
 def format_total_portfolio(results: list) -> str:
-    """資產投資組合總計（包含美股與 BTC，換算 USD 統計）。"""
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
@@ -492,7 +498,6 @@ def format_total_portfolio(results: list) -> str:
     return "\n".join(lines)
 
 def build_message(results: list) -> str:
-    """組裝完整訊息。"""
     today = datetime.now().strftime("%Y-%m-%d")
 
     stock_results = [r for r in results if r["name"] != "BTC"]
@@ -514,7 +519,6 @@ def build_message(results: list) -> str:
     return "\n\n".join(sections)
 
 def send_line_message(text: str) -> bool:
-    """透過 LINE Messaging API push 訊息。"""
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_IDS:
         print("[錯誤] 未設定 LINE_CHANNEL_ACCESS_TOKEN 或 LINE_USER_IDS")
         print("訊息內容（未發送）：")
