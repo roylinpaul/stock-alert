@@ -151,24 +151,30 @@ LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.stri
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 def fetch_price_data(symbol: str):
-    """取得歷史日K序列，並透過 fast_info 確保即時收盤價與昨日收盤價精準無延遲"""
+    """取得歷史日K序列，並修正 fast_info 存取語法以確保即時收盤價準確"""
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="2y", prepost=False)
+        hist = ticker.history(period="1y", interval="1d", auto_adjust=False)
         if hist.empty or len(hist) < 2:
             return None
         closes = hist["Close"].dropna()
 
         latest_price = None
         prev_price = None
+
+        # 修正：不使用 .get()，改用 getattr 或 key 索引
         try:
             fast = ticker.fast_info
-            latest_price = fast.get("last_price")
-            prev_price = fast.get("previous_close")
+            latest_price = getattr(fast, "last_price", None)
+            if latest_price is None:
+                latest_price = fast["last_price"]
+            prev_price = getattr(fast, "previous_close", None)
+            if prev_price is None:
+                prev_price = fast["previous_close"]
         except Exception:
             pass
 
-        if latest_price is None or prev_price is None:
+        if latest_price is None or prev_price is None or latest_price <= 0:
             latest_price = float(closes.iloc[-1])
             prev_price = float(closes.iloc[-2])
 
