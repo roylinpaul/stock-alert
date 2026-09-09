@@ -21,6 +21,12 @@ TICKERS = {
         "multi_day_threshold": -10.0,
         "watch_threshold": -10.0,
     },
+    "SPCX": {
+        "symbol": "SPCX",
+        "daily_threshold": -5.0,
+        "multi_day_threshold": -10.0,
+        "watch_threshold": -10.0,
+    },
     "BTC": {
         "symbol": "BTC-USD",
         "daily_threshold": -8.0,
@@ -30,11 +36,14 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-HOLDINGS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "holdings")
+# 指定您的專屬庫存 CSV 資料夾路徑
+HOLDINGS_DIR = r"C:\Users\99109\Documents\庫存"
 
+# 備用預設值（已同步 2026/09/09 最新扣款入帳數據）
 DEFAULT_HOLDINGS = {
-    "QQQ": {"shares": 3.30903, "avg_cost": 702.4717},
-    "TSLA": {"shares": 7.04474, "avg_cost": 378.2652},
+    "QQQ": {"shares": 3.44777, "avg_cost": 703.2372},
+    "TSLA": {"shares": 7.32457, "avg_cost": 377.4802},
+    "SPCX": {"shares": 0.67087, "avg_cost": 149.2092},
 }
 
 def _to_num(x):
@@ -49,6 +58,9 @@ def _to_num(x):
         return 0.0
 
 def _pick_latest_csv(folder):
+    if not os.path.exists(folder):
+        print(f"[持股] 目錄不存在：{folder}")
+        return None
     files = glob.glob(os.path.join(folder, "*.csv"))
     if not files:
         return None
