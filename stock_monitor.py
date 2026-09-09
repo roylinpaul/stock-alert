@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 import requests
 import yfinance as yf
-
+ 
 # ===== 監控標的設定 =====
 TICKERS = {
     "QQQ": {
@@ -34,16 +34,16 @@ TICKERS = {
         "watch_threshold": -15.0,
     },
 }
-
+ 
 # ===== 美股持股設定 =====
 HOLDINGS_DIR = r"C:\Users\99109\Documents\庫存"
-
+ 
 DEFAULT_HOLDINGS = {
     "QQQ": {"shares": 3.44777, "avg_cost": 703.2372},
     "TSLA": {"shares": 7.32457, "avg_cost": 377.4802},
     "SPCX": {"shares": 0.67087, "avg_cost": 149.2092},
 }
-
+ 
 def _to_num(x):
     if x is None:
         return 0.0
@@ -54,7 +54,7 @@ def _to_num(x):
         return float(s)
     except ValueError:
         return 0.0
-
+ 
 def _pick_latest_csv(folder):
     if not os.path.exists(folder):
         print(f"[持股] 目錄不存在：{folder}")
@@ -65,21 +65,21 @@ def _pick_latest_csv(folder):
     cand = [f for f in files if "複委託庫存" in os.path.basename(f)]
     if not cand:
         cand = files
-
+ 
     def sort_key(f):
         m = re.search(r"(\d{14})", os.path.basename(f))
         ts = int(m.group(1)) if m else 0
         return (ts, os.path.getmtime(f))
-
+ 
     return max(cand, key=sort_key)
-
+ 
 def load_holdings():
     try:
         path = _pick_latest_csv(HOLDINGS_DIR)
         if not path:
             print("[持股] 未找到庫存 CSV，使用內建預設值")
             return dict(DEFAULT_HOLDINGS)
-
+ 
         raw = None
         for enc in ("utf-8-sig", "cp950", "big5"):
             try:
@@ -91,7 +91,7 @@ def load_holdings():
         if raw is None:
             print(f"[持股] 無法解碼 {os.path.basename(path)}，使用內建預設值")
             return dict(DEFAULT_HOLDINGS)
-
+ 
         agg = {}
         for row in csv.DictReader(io.StringIO(raw)):
             code = (row.get("代號") or "").strip().strip('"')
@@ -106,7 +106,7 @@ def load_holdings():
             a = agg.setdefault(code, {"shares": 0.0, "cost": 0.0})
             a["shares"] += shares
             a["cost"] += cost
-
+ 
         holdings = {
             code: {"shares": a["shares"], "avg_cost": a["cost"] / a["shares"]}
             for code, a in agg.items()
@@ -115,7 +115,7 @@ def load_holdings():
         if not holdings:
             print(f"[持股] {os.path.basename(path)} 無有效持股列，使用內建預設值")
             return dict(DEFAULT_HOLDINGS)
-
+ 
         print(
             f"[持股] 已從 {os.path.basename(path)} 載入："
             + ", ".join(
@@ -127,57 +127,65 @@ def load_holdings():
     except Exception as e:
         print(f"[持股] 讀取庫存 CSV 發生例外：{e}，使用內建預設值")
         return dict(DEFAULT_HOLDINGS)
-
+ 
 HOLDINGS = load_holdings()
-
+ 
 # ===== BTC 持倉設定 =====
 BTC_HOLDING = {
     "amount": 0.00705226,
     "cost_twd": 15996.30,
 }
-
+ 
 MULTI_DAY_WINDOW = 5
 HIGH_POINT_WINDOW = 30
 MA_QUARTER = 60
 MA_YEAR = 240
-
+ 
 # ===== MAX 交易所 API =====
 MAX_API_BASE = "https://max-api.maicoin.com/api/v2"
-
+ 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_USER_IDS_RAW = os.environ.get("LINE_USER_IDS", "")
 LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.strip()]
-
+ 
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
-
+ 
 def fetch_price_data(symbol: str):
-    """取得歷史日K序列，並修正 fast_info 存取語法以確保即時收盤價準確"""
+    """取得歷史日K序列，並確保「當日漲跌」使用同一基準（正常盤 vs 正常盤前收）。
+ 
+    修正重點：
+    yfinance 的 fast_info.previous_close 是用「含盤前盤後」的 1 小時K線算出來的前一
+    日曆日最後成交價，跟 fast_info.last_price（純正常盤日K的最新價）基準不一致，
+    兩者相除會系統性算錯漲跌%。改用 regular_market_previous_close，它跟
+    last_price 一樣來自純正常盤日K，基準才會一致。
+    """
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1y", interval="1d", auto_adjust=False)
         if hist.empty or len(hist) < 2:
             return None
         closes = hist["Close"].dropna()
-
+ 
         latest_price = None
         prev_price = None
-
-        # 修正：不使用 .get()，改用 getattr 或 key 索引
+ 
         try:
             fast = ticker.fast_info
             latest_price = getattr(fast, "last_price", None)
             if latest_price is None:
                 latest_price = fast["last_price"]
-            prev_price = getattr(fast, "previous_close", None)
+            # 注意：不要用 fast.previous_close（含盤前盤後，基準跟 last_price 不同）。
+            # regular_market_previous_close 才是跟 last_price 同一基準的「前一正常盤收盤」。
+            prev_price = getattr(fast, "regular_market_previous_close", None)
             if prev_price is None:
-                prev_price = fast["previous_close"]
+                prev_price = fast["regularMarketPreviousClose"]
         except Exception:
             pass
-
-        if latest_price is None or prev_price is None or latest_price <= 0:
+ 
+        if latest_price is None or prev_price is None or latest_price <= 0 or prev_price <= 0:
             latest_price = float(closes.iloc[-1])
             prev_price = float(closes.iloc[-2])
-
+ 
         return {
             "closes": closes,
             "latest_price": float(latest_price),
@@ -186,21 +194,21 @@ def fetch_price_data(symbol: str):
     except Exception as e:
         print(f"[錯誤] 抓取 {symbol} 歷史資料失敗: {e}")
         return None
-
+ 
 def fetch_max_btc_twd():
     """從 MAX 交易所抓 BTC/TWD 即時行情與日K，包含 USD 參考價與匯率。"""
     try:
         t = requests.get(f"{MAX_API_BASE}/tickers/btctwd", timeout=10).json()
         last = float(t["last"])
         open_p = float(t["open"])
-
+ 
         k = requests.get(
             f"{MAX_API_BASE}/k",
             params={"market": "btctwd", "period": 1440, "limit": 260},
             timeout=10,
         ).json()
         closes = [float(row[4]) for row in k]
-
+ 
         btc_usd = None
         usdtwd = 32.0
         try:
@@ -210,12 +218,12 @@ def fetch_max_btc_twd():
                 usdtwd = last / btc_usd
         except Exception:
             pass
-
+ 
         return {"last": last, "open": open_p, "closes": closes, "btc_usd": btc_usd, "usdtwd": usdtwd}
     except Exception as e:
         print(f"[錯誤] 抓取 MAX BTC/TWD 失敗: {e}")
         return None
-
+ 
 def calc_ma(closes, window: int):
     if len(closes) < window + 1:
         return None, None
@@ -223,40 +231,40 @@ def calc_ma(closes, window: int):
     ma_today = ma_series.iloc[-1]
     ma_yesterday = ma_series.iloc[-2]
     return ma_today, ma_yesterday
-
+ 
 def analyze(name: str, config: dict):
     """分析單一美股標的（yfinance，美元計價）。"""
     price_info = fetch_price_data(config["symbol"])
     if price_info is None:
         print(f"[警告] {name} 資料不足，略過")
         return None
-
+ 
     closes = price_info["closes"]
     latest_price = price_info["latest_price"]
     prev_price = price_info["prev_price"]
-
+ 
     daily_change_pct = (latest_price - prev_price) / prev_price * 100
-
+ 
     hp_window = closes.iloc[-HIGH_POINT_WINDOW:] if len(closes) >= HIGH_POINT_WINDOW else closes
     high_30d = max(hp_window.max(), latest_price)
     high_30d_date = hp_window.idxmax().strftime("%m/%d")
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
-
+ 
     cumulative_change_pct = None
     if len(closes) > MULTI_DAY_WINDOW:
         window_start_price = closes.iloc[-(MULTI_DAY_WINDOW + 1)]
         cumulative_change_pct = (latest_price - window_start_price) / window_start_price * 100
-
+ 
     ma60_today, ma60_yesterday = calc_ma(closes, MA_QUARTER)
     broke_ma60 = False
     if ma60_today is not None and ma60_yesterday is not None:
         broke_ma60 = (prev_price >= ma60_yesterday) and (latest_price < ma60_today)
-
+ 
     ma240_today, ma240_yesterday = calc_ma(closes, MA_YEAR)
     broke_ma240 = False
     if ma240_today is not None and ma240_yesterday is not None:
         broke_ma240 = (prev_price >= ma240_yesterday) and (latest_price < ma240_today)
-
+ 
     is_daily_alert = daily_change_pct <= config["daily_threshold"]
     is_multi_day_alert = (
         cumulative_change_pct is not None
@@ -264,10 +272,10 @@ def analyze(name: str, config: dict):
     )
     is_alert = is_daily_alert or is_multi_day_alert
     is_watch = drawdown_pct <= config["watch_threshold"]
-
+ 
     vs_ma60 = (latest_price - ma60_today) / ma60_today * 100 if ma60_today else None
     vs_ma240 = (latest_price - ma240_today) / ma240_today * 100 if ma240_today else None
-
+ 
     h = HOLDINGS.get(name)
     holding = None
     if h and h["shares"] > 0:
@@ -283,7 +291,7 @@ def analyze(name: str, config: dict):
             "pnl_amount": pnl_amount,
             "pnl_pct": pnl_pct,
         }
-
+ 
     return {
         "name": name,
         "latest_price": latest_price,
@@ -308,59 +316,59 @@ def analyze(name: str, config: dict):
         "watch_threshold": config["watch_threshold"],
         "holding": holding,
     }
-
+ 
 def analyze_btc_twd(config: dict, max_data: dict):
     """以 MAX BTC/TWD 台幣資料分析 BTC（包含 USD 計算持倉）。"""
     closes = max_data["closes"]
     if not closes or len(closes) < 2:
         return None
-
+ 
     latest_price = max_data["last"]
     prev_price = float(closes[-2])
     open_today = max_data["open"]
-
+ 
     daily_change_pct = (latest_price - open_today) / open_today * 100 if open_today else 0.0
-
+ 
     hp = closes[-HIGH_POINT_WINDOW:] if len(closes) >= HIGH_POINT_WINDOW else closes
     high_30d = max(hp)
     high_30d_date = datetime.now().strftime("%m/%d")
-
+ 
     cumulative_change_pct = None
     if len(closes) > MULTI_DAY_WINDOW:
         window_start = closes[-(MULTI_DAY_WINDOW + 1)]
         cumulative_change_pct = (latest_price - window_start) / window_start * 100
-
+ 
     def ma(n):
         if len(closes) < n:
             return None
         return sum(closes[-n:]) / n
-
+ 
     ma60 = ma(MA_QUARTER)
     ma240 = ma(MA_YEAR)
     vs_ma60 = (latest_price - ma60) / ma60 * 100 if ma60 else None
     vs_ma240 = (latest_price - ma240) / ma240 * 100 if ma240 else None
-
+ 
     is_daily_alert = daily_change_pct <= config["daily_threshold"]
     is_multi_day_alert = (
         cumulative_change_pct is not None
         and cumulative_change_pct <= config["multi_day_threshold"]
     )
     drawdown_pct = (latest_price - high_30d) / high_30d * 100
-
+ 
     btc_holding_data = None
     if BTC_HOLDING and BTC_HOLDING.get("amount", 0) > 0:
         amount = BTC_HOLDING["amount"]
         cost_twd = BTC_HOLDING["cost_twd"]
         value_twd = amount * latest_price
         pnl_twd = value_twd - cost_twd
-        
+ 
         usdtwd = max_data.get("usdtwd", 32.0)
         cost_usd = cost_twd / usdtwd
         btc_usd = max_data.get("btc_usd") or (latest_price / usdtwd)
         market_value_usd = amount * btc_usd
         pnl_usd = market_value_usd - cost_usd
         pnl_pct = (pnl_usd / cost_usd * 100) if cost_usd else 0.0
-
+ 
         btc_holding_data = {
             "amount": amount,
             "cost_twd": cost_twd,
@@ -371,7 +379,7 @@ def analyze_btc_twd(config: dict, max_data: dict):
             "pnl_amount": pnl_usd,
             "pnl_pct": pnl_pct,
         }
-
+ 
     return {
         "name": "BTC",
         "latest_price": latest_price,
@@ -398,7 +406,7 @@ def analyze_btc_twd(config: dict, max_data: dict):
         "usdtwd": max_data.get("usdtwd"),
         "holding": btc_holding_data,
     }
-
+ 
 def _loss_desc(pnl_pct: float) -> str:
     if pnl_pct >= 0:
         if pnl_pct < 3:
@@ -419,7 +427,7 @@ def _loss_desc(pnl_pct: float) -> str:
             return "賬面中幅浮虧"
         else:
             return "賬面大幅浮虧"
-
+ 
 def format_btc_twd_holding(result: dict) -> str:
     if not result.get("holding"):
         return None
@@ -428,11 +436,11 @@ def format_btc_twd_holding(result: dict) -> str:
     avg_price_twd = h["cost_twd"] / h["amount"] if h["amount"] else 0.0
     sign = "🟢" if h["pnl_twd"] >= 0 else "🔴"
     desc = _loss_desc(h["pnl_pct"])
-
+ 
     usd_note = ""
     if result.get("btc_usd"):
         usd_note = f"（折合約 ${result['btc_usd']:,.0f} 美元）"
-
+ 
     return "\n".join([
         f"   持有數量 {h['amount']:.8f} BTC",
         f"   投入成本 NT${h['cost_twd']:,.2f}",
@@ -441,17 +449,17 @@ def format_btc_twd_holding(result: dict) -> str:
         f"   現值 NT${h['value_twd']:,.2f}",
         f"   {sign} 損益 {h['pnl_pct']:+.2f}%（{desc} NT${h['pnl_twd']:+,.2f}）",
     ])
-
+ 
 def format_normal(result: dict) -> str:
     name = result["name"]
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
-
+ 
     lines = [
         f"{arrow} {name} 當日 {daily:+.2f}%",
         f"   收盤 {result['latest_price']:.2f}",
     ]
-
+ 
     if result.get("holding"):
         h = result["holding"]
         lines.append(f"   持股 {h['shares']:.5f} 股")
@@ -459,40 +467,40 @@ def format_normal(result: dict) -> str:
         lines.append(f"   現值 {h['market_value']:.2f}")
         sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
         lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}（{h['pnl_pct']:+.2f}%）")
-
+ 
     return "\n".join(lines)
-
+ 
 def format_btc_merged(result: dict) -> str:
     daily = result["daily_change_pct"]
     arrow = "📈" if daily >= 0 else "📉"
-
+ 
     btc_usd_price = result.get("btc_usd")
     if btc_usd_price is None and result.get("usdtwd"):
         btc_usd_price = result["latest_price"] / result["usdtwd"]
     elif btc_usd_price is None:
         btc_usd_price = 0.0
-
+ 
     lines = [
         f"{arrow} BTC 當日 {daily:+.2f}%",
         f"   收盤 ${btc_usd_price:,.2f}",
     ]
-
+ 
     holding_block = format_btc_twd_holding(result)
     if holding_block:
         lines.append(holding_block)
-
+ 
     return "\n".join(lines)
-
+ 
 def format_total_portfolio(results: list) -> str:
     held = [r for r in results if r.get("holding")]
     if not held:
         return None
-
+ 
     total_cost = sum(r["holding"]["cost_basis"] for r in held)
     total_value = sum(r["holding"]["market_value"] for r in held)
     total_pnl = total_value - total_cost
     total_pct = (total_pnl / total_cost * 100) if total_cost else 0.0
-
+ 
     big = "🟢" if total_pnl >= 0 else "🔴"
     lines = [
         "💼 總投資組合總計 (含BTC, USD)",
@@ -502,40 +510,40 @@ def format_total_portfolio(results: list) -> str:
         f"{big} 總損益 ${total_pnl:+.2f}（{total_pct:+.2f}%）",
     ]
     return "\n".join(lines)
-
+ 
 def build_message(results: list) -> str:
     today = datetime.now().strftime("%Y-%m-%d")
-
+ 
     stock_results = [r for r in results if r["name"] != "BTC"]
     btc_result = next((r for r in results if r["name"] == "BTC"), None)
-
+ 
     sections = [f"📊 市場日報 ({today})", "━━━━━━━━━━━━━━━"]
-
+ 
     for r in stock_results:
         sections.append(format_normal(r))
-
+ 
     if btc_result is not None:
         sections.append(format_btc_merged(btc_result))
-
+ 
     portfolio = format_total_portfolio(results)
     if portfolio:
         sections.append("=================")
         sections.append(portfolio)
-
+ 
     return "\n\n".join(sections)
-
+ 
 def send_line_message(text: str) -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_USER_IDS:
         print("[錯誤] 未設定 LINE_CHANNEL_ACCESS_TOKEN 或 LINE_USER_IDS")
         print("訊息內容（未發送）：")
         print(text)
         return False
-
+ 
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json",
     }
-
+ 
     success_count = 0
     for user_id in LINE_USER_IDS:
         payload = {
@@ -551,17 +559,17 @@ def send_line_message(text: str) -> bool:
                 print(f"[錯誤] 發送至 {user_id[:10]}... 失敗 ({resp.status_code}): {resp.text}")
         except requests.RequestException as e:
             print(f"[錯誤] 發送至 {user_id[:10]}... 例外：{e}")
-
+ 
     return success_count > 0
-
+ 
 def main():
     print(f"=== 監控執行於 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     print(f"通知對象數：{len(LINE_USER_IDS)} 人")
-
+ 
     max_btc = fetch_max_btc_twd()
     if max_btc is not None:
         print(f"MAX BTC/TWD 即時價：{max_btc['last']:,.0f}")
-
+ 
     results = []
     for name, config in TICKERS.items():
         try:
@@ -597,17 +605,17 @@ def main():
                 )
         except Exception as e:
             print(f"[錯誤] 處理 {name} 時發生例外：{e}")
-
+ 
     if not results:
         print("無任何資料，結束。")
         return
-
+ 
     message = build_message(results)
     print("\n=== 即將發送訊息 ===")
     print(message)
     print("===================\n")
-
+ 
     send_line_message(message)
-
+ 
 if __name__ == "__main__":
     main()
