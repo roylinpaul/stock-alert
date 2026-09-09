@@ -36,7 +36,13 @@ TICKERS = {
 }
  
 # ===== 美股持股設定 =====
-HOLDINGS_DIR = r"C:\Users\99109\Documents\庫存"
+# 優先讀 repo 內的 holdings/ 資料夾（GitHub Actions 執行環境用，checkout 時會一併帶入）
+# 找不到才 fallback 讀本機 Windows 路徑（本機手動執行用）
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+HOLDINGS_DIRS = [
+    os.path.join(SCRIPT_DIR, "holdings"),
+    r"C:\Users\99109\Documents\庫存",
+]
  
 DEFAULT_HOLDINGS = {
     "QQQ": {"shares": 3.44777, "avg_cost": 703.2372},
@@ -75,7 +81,11 @@ def _pick_latest_csv(folder):
  
 def load_holdings():
     try:
-        path = _pick_latest_csv(HOLDINGS_DIR)
+        path = None
+        for folder in HOLDINGS_DIRS:
+            path = _pick_latest_csv(folder)
+            if path:
+                break
         if not path:
             print("[持股] 未找到庫存 CSV，使用內建預設值")
             return dict(DEFAULT_HOLDINGS)
