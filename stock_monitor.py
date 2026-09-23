@@ -36,8 +36,6 @@ TICKERS = {
 }
 
 # ===== 美股持股設定 =====
-# 優先讀 repo 內的 holdings/ 資料夾（GitHub Actions 執行環境用，checkout 時會一併帶入）
-# 找不到才 fallback 讀本機 Windows 路徑（本機手動執行用）
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HOLDINGS_DIRS = [
     os.path.join(SCRIPT_DIR, "holdings"),
@@ -161,14 +159,6 @@ LINE_USER_IDS = [uid.strip() for uid in LINE_USER_IDS_RAW.split(",") if uid.stri
 LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
 def fetch_price_data(symbol: str):
-    """取得歷史日K序列，並確保「當日漲跌」使用同一基準（正常盤 vs 正常盤前收）。
-
-    修正重點：
-    yfinance 的 fast_info.previous_close 是用「含盤前盤後」的 1 小時K線算出來的前一
-    日曆日最後成交價，跟 fast_info.last_price（純正常盤日K的最新價）基準不一致，
-    兩者相除會系統性算錯漲跌%。改用 regular_market_previous_close，它跟
-    last_price 一樣來自純正常盤日K，基準才會一致。
-    """
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1y", interval="1d", auto_adjust=False)
@@ -184,8 +174,6 @@ def fetch_price_data(symbol: str):
             latest_price = getattr(fast, "last_price", None)
             if latest_price is None:
                 latest_price = fast["last_price"]
-            # 注意：不要用 fast.previous_close（含盤前盤後，基準跟 last_price 不同）。
-            # regular_market_previous_close 才是跟 last_price 同一基準的「前一正常盤收盤」。
             prev_price = getattr(fast, "regular_market_previous_close", None)
             if prev_price is None:
                 prev_price = fast["regularMarketPreviousClose"]
@@ -206,7 +194,6 @@ def fetch_price_data(symbol: str):
         return None
 
 def fetch_max_btc_twd():
-    """從 MAX 交易所抓 BTC/TWD 即時行情與日K，包含 USD 參考價與匯率。"""
     try:
         t = requests.get(f"{MAX_API_BASE}/tickers/btctwd", timeout=10).json()
         last = float(t["last"])
@@ -243,7 +230,6 @@ def calc_ma(closes, window: int):
     return ma_today, ma_yesterday
 
 def analyze(name: str, config: dict):
-    """分析單一美股標的（yfinance，美元計價）。"""
     price_info = fetch_price_data(config["symbol"])
     if price_info is None:
         print(f"[警告] {name} 資料不足，略過")
@@ -328,7 +314,6 @@ def analyze(name: str, config: dict):
     }
 
 def analyze_btc_twd(config: dict, max_data: dict):
-    """以 MAX BTC/TWD 台幣資料分析 BTC（包含 USD 計算持倉）。"""
     closes = max_data["closes"]
     if not closes or len(closes) < 2:
         return None
@@ -447,7 +432,6 @@ def format_btc_twd_holding(result: dict) -> str:
     sign = "🟢" if h["pnl_twd"] >= 0 else "🔴"
     desc = _loss_desc(h["pnl_pct"])
 
-    # 計算美元均價與市價
     usdtwd = result.get("usdtwd") or 32.0
     avg_price_usd = avg_price_twd / usdtwd if usdtwd else 0.0
     btc_usd = result.get("btc_usd")
@@ -507,7 +491,8 @@ def format_btc_merged(result: dict) -> str:
     return "\n".join(lines)
 
 def format_total_portfolio(results: list) -> str:
-    held = [r for r in results if r.get("holding")]
+    # 僅計算持有標的，並明確排除 BTC
+    held = [r for r in results if r.get("holding") and r.get("name") != "BTC"]
     if not held:
         return None
 
@@ -518,7 +503,7 @@ def format_total_portfolio(results: list) -> str:
 
     big = "🟢" if total_pnl >= 0 else "🔴"
     lines = [
-        "💼 總投資組合總計 (含BTC, USD)",
+        "💼 美股投資組合總計 (不含BTC, USD)",
         "─────────────",
         f"總成本 ${total_cost:.2f}",
         f"總現值 ${total_value:.2f}",
