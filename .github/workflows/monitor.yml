@@ -2,10 +2,12 @@ name: Stock Alert Monitor
 
 on:
   schedule:
-    # UTC 週一~週五 23:00 執行 = 台灣時間週二~週六早上 7:00
-    # 跑的時候美股已經收盤,可拿到前一天完整收盤資料
-    # 如要改時間,UTC = 台灣時間 - 8 小時(注意可能跨日)
-    - cron: '0 22 * * 1-5'
+    # 美股收盤 = 紐約時間 16:00,收盤後 10 分鐘發送
+    # 夏令 EDT(3月第2個週日~11月第1個週日):UTC 20:10 = 台灣 04:10
+    # 冬令 EST:UTC 21:10 = 台灣 05:10
+    # GitHub cron 只能用 UTC,兩個都排,由 gate 步驟依紐約當下是否夏令只放行一個
+    - cron: '10 20 * * 1-5'
+    - cron: '10 21 * * 1-5'
 
   # 允許在 GitHub 網頁上手動觸發測試
   workflow_dispatch:
@@ -14,20 +16,35 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
+      - name: DST gate
+        id: gate
+        run: |
+          NYTZ=$(TZ=America/New_York date +%Z)
+          SCHED="${{ github.event.schedule }}"
+          RUN=true
+          if [ "$SCHED" = "10 20 * * 1-5" ] && [ "$NYTZ" != "EDT" ]; then RUN=false; fi
+          if [ "$SCHED" = "10 21 * * 1-5" ] && [ "$NYTZ" != "EST" ]; then RUN=false; fi
+          echo "NY=$NYTZ schedule='$SCHED' run=$RUN"
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+
       - name: Checkout code
+        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install yfinance requests
 
       - name: Run stock monitor
+        if: steps.gate.outputs.run == 'true'
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_IDS: ${{ secrets.LINE_USER_IDS }}
