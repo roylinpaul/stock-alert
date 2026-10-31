@@ -27,6 +27,12 @@ TICKERS = {
         "multi_day_threshold": -10.0,
         "watch_threshold": -10.0,
     },
+    "GOOG": {
+        "symbol": "GOOG",
+        "daily_threshold": -5.0,
+        "multi_day_threshold": -10.0,
+        "watch_threshold": -10.0,
+    },
     "BTC": {
         "symbol": "BTC-USD",
         "daily_threshold": -8.0,
@@ -43,9 +49,9 @@ HOLDINGS_DIRS = [
 ]
 
 DEFAULT_HOLDINGS = {
-    "QQQ": {"shares": 3.44777, "avg_cost": 703.2372},
-    "TSLA": {"shares": 7.32457, "avg_cost": 377.4802},
-    "SPCX": {"shares": 0.67087, "avg_cost": 149.2092},
+    "GOOG": {"shares": 3.0, "avg_cost": 281.523},
+    "TSLA": {"shares": 8.67218, "avg_cost": 376.544},
+    "SPCX": {"shares": 3.33581, "avg_cost": 150.039},
 }
 
 def _to_num(x):
