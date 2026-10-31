@@ -32,6 +32,8 @@ TICKERS = {
         "daily_threshold": -5.0,
         "multi_day_threshold": -10.0,
         "watch_threshold": -10.0,
+        "target_pct": 20.0,
+        "stop_pct": -15.0,
     },
     "BTC": {
         "symbol": "BTC-USD",
@@ -292,6 +294,9 @@ def analyze(name: str, config: dict):
             "market_value": market_value,
             "pnl_amount": pnl_amount,
             "pnl_pct": pnl_pct,
+            "target_price": h["avg_cost"] * (1 + config["target_pct"] / 100) if config.get("target_pct") is not None else None,
+            "stop_price": h["avg_cost"] * (1 + config["stop_pct"] / 100) if config.get("stop_pct") is not None else None,
+
         }
 
     return {
@@ -472,6 +477,17 @@ def format_normal(result: dict) -> str:
         lines.append(f"   現值 {h['market_value']:.2f}")
         sign = "🟢" if h["pnl_amount"] >= 0 else "🔴"
         lines.append(f"   {sign} 損益 {h['pnl_amount']:+.2f}（{h['pnl_pct']:+.2f}%）")
+        px = result["latest_price"]
+        if h.get("target_price"):
+            if px >= h["target_price"]:
+                lines.append(f"   🎯 已達標 {h['target_price']:.2f}，依計畫賣出換回 QQQ")
+            else:
+                lines.append(f"   🎯 目標 {h['target_price']:.2f}（還差 {(h['target_price']/px-1)*100:.1f}%）")
+        if h.get("stop_price"):
+            if px <= h["stop_price"]:
+                lines.append(f"   🛑 已觸及停損線 {h['stop_price']:.2f}，重新評估")
+            else:
+                lines.append(f"   🛑 停損 {h['stop_price']:.2f}（距 {(px/h['stop_price']-1)*100:.1f}%）")
 
     return "\n".join(lines)
 
